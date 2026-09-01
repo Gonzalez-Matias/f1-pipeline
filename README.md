@@ -46,10 +46,11 @@ Descarga un único GP por año y round.
 ```
 airflow-f1/
 ├── dags/                 # DAGs de Airflow
-│   └── f1_download_year.py
+│   ├── f1_download_year.py
 │   └── f1_download_gp.py
 ├── include/
 │   ├── f1/              # Lógica del pipeline
+│   │   ├── __init__.py
 │   │   ├── config.py    # Configuración central
 │   │   ├── download.py  # Descarga de datos crudos (bronze)
 │   │   ├── silver.py    # Procesamiento y features (silver)
@@ -60,6 +61,7 @@ airflow-f1/
 ├── notebooks/
 │   └── explorar_parquet_f1.ipynb
 ├── docker-compose.yml
+├── Dockerfile
 └── requirements.txt
 ```
 
@@ -76,7 +78,9 @@ airflow-f1/
    rm -rf include/output/*
    ```
 
-2. Trigger del DAG con `force=true` desde la UI de Airflow.
+2. Trigger del DAG con **`force=true`** desde la UI de Airflow.
+
+   Con `force=true` se **re-descargan** todos los datos desde los repos (no solo se reprocesan).
 
 ---
 
