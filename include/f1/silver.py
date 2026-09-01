@@ -549,14 +549,14 @@ def consolidate_year(year: int, mode: str = "full") -> dict[str, str]:
         Dict con rutas de consolidados generados.
     """
     result_paths = {}
-    year_dir = SILVER_DIR / str(year)
-    
-    if not year_dir.exists():
+    partials_dir = PARTIALS_DIR / str(year)
+
+    if not partials_dir.exists():
         log.warning("No hay datos en Plata para %s", year)
         return result_paths
 
     # Consolidar _results (siempre)
-    result_files = sorted(year_dir.glob("*_results.parquet"))
+    result_files = sorted(partials_dir.glob("*_results.parquet"))
     if result_files:
         dfs = [pd.read_parquet(f) for f in result_files]
         df = pd.concat(dfs, ignore_index=True)
@@ -569,7 +569,7 @@ def consolidate_year(year: int, mode: str = "full") -> dict[str, str]:
 
     # Consolidar _full (solo si mode='full')
     if mode == "full":
-        full_files = sorted(year_dir.glob("*_full.parquet"))
+        full_files = sorted(partials_dir.glob("*_full.parquet"))
         if full_files:
             dfs = [pd.read_parquet(f) for f in full_files]
             df = pd.concat(dfs, ignore_index=True)
@@ -583,11 +583,46 @@ def consolidate_year(year: int, mode: str = "full") -> dict[str, str]:
     return result_paths
 
 
+def _upsert_parquet(existing_path: Path, new_df: pd.DataFrame) -> pd.DataFrame:
+    """Combina new_df con el parquet existente.
+
+    Reemplaza las filas de los GPs presentes en new_df (identificados por
+    Year + RoundNumber) y conserva el resto del historico. Evita la perdida
+    de datos al consolidar rangos parciales o un unico GP.
+    """
+    if new_df.empty:
+        if existing_path.exists():
+            return pd.read_parquet(existing_path)
+        return new_df
+
+    if not existing_path.exists():
+        return new_df
+
+    if "Year" not in new_df.columns or "RoundNumber" not in new_df.columns:
+        return pd.concat([pd.read_parquet(existing_path), new_df], ignore_index=True)
+
+    existing = pd.read_parquet(existing_path)
+
+    new_keys = pd.MultiIndex.from_frame(
+        new_df[["Year", "RoundNumber"]].astype(str)
+    )
+    existing_keys = pd.MultiIndex.from_frame(
+        existing[["Year", "RoundNumber"]].astype(str)
+    )
+    mask = ~existing_keys.isin(new_keys)
+
+    kept = existing[mask]
+    return pd.concat([kept, new_df], ignore_index=True)
+
+
 def consolidate_all(mode: str = "full", cleanup: bool = True) -> dict[str, str]:
     """
     Une TODOS los GPs de TODOS los anos en uno o dos parquet.
     Lee de silver/_parciales/, escribe en output/, y limpia parciales.
-    
+
+    Hace upsert sobre el consolidado existente para no perder anos que no
+    estan en los parciales actuales (p.ej. al correr un rango parcial).
+
     Returns:
         Dict con rutas de consolidados generados.
     """
@@ -596,12 +631,14 @@ def consolidate_all(mode: str = "full", cleanup: bool = True) -> dict[str, str]:
     # Consolidar _results (siempre)
     all_result_files = sorted(PARTIALS_DIR.glob("*/*_results.parquet"))
     if all_result_files:
-        dfs = [pd.read_parquet(f) for f in all_result_files]
-        df = pd.concat(dfs, ignore_index=True)
+        new_df = pd.concat(
+            [pd.read_parquet(f) for f in all_result_files], ignore_index=True
+        )
         dest = OUTPUT_DIR / "f1_all_results.parquet"
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        df = _upsert_parquet(dest, new_df)
         df.to_parquet(dest, index=False)
-        log.info("Consolidado all results: %s GPs, %s filas x %s columnas -> %s",
+        log.info("Consolidado all results: %s GPs nuevos, %s filas x %s columnas -> %s",
                  len(all_result_files), len(df), len(df.columns), dest)
         result_paths["results"] = str(dest)
     else:
@@ -611,11 +648,13 @@ def consolidate_all(mode: str = "full", cleanup: bool = True) -> dict[str, str]:
     if mode == "full":
         all_full_files = sorted(PARTIALS_DIR.glob("*/*_full.parquet"))
         if all_full_files:
-            dfs = [pd.read_parquet(f) for f in all_full_files]
-            df = pd.concat(dfs, ignore_index=True)
+            new_df = pd.concat(
+                [pd.read_parquet(f) for f in all_full_files], ignore_index=True
+            )
             dest = OUTPUT_DIR / "f1_all_full.parquet"
+            df = _upsert_parquet(dest, new_df)
             df.to_parquet(dest, index=False)
-            log.info("Consolidado all full: %s GPs, %s filas x %s columnas -> %s",
+            log.info("Consolidado all full: %s GPs nuevos, %s filas x %s columnas -> %s",
                      len(all_full_files), len(df), len(df.columns), dest)
             result_paths["full"] = str(dest)
         else:
@@ -659,7 +698,7 @@ def main(years: list[int] | None = None, mode: str = "full") -> None:
 
         consolidate_year(year, mode=mode)
 
-    consolidate_all(years, mode=mode)
+    consolidate_all(mode=mode)
 
 
 if __name__ == "__main__":

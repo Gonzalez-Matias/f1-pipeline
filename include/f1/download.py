@@ -365,19 +365,20 @@ def write_manifest(
 
 
 def process_single_gp(
-    year: int, round_num: int, race_name: str, force: bool = False
+    year: int, round_num: int, race_name: str, force: bool = False, mode: str = "full"
 ) -> dict:
     """Procesa UN GP completo. Funcion pura, lista para convertir en @task."""
     slug = slugify(race_name)
-    log.info("GP %s (%s) - %s", round_num, slug, race_name)
+    log.info("GP %s (%s) - %s (mode=%s)", round_num, slug, race_name, mode)
 
     # Archive (todos los anos)
     archive_res = download_gp_archive(year, race_name, slug, force=force)
     log.info("  Archive: %s descargados, %s faltantes", archive_res["downloaded"], archive_res["missing"])
 
-    # FastF1 metadata + telemetry (2018+)
+    # FastF1 metadata + telemetry (2018+). Solo si mode='full':
+    # results_only no necesita telemetria ni datos de practicas.
     fastf1_res = {"sessions": 0, "files_downloaded": 0, "files_missing": 0, "tel_downloaded": 0, "tel_skipped": 0, "tel_missing": 0}
-    if year >= 2018:
+    if mode == "full" and year >= 2018:
         fastf1_res = download_gp_fastf1(year, race_name, slug, force=force)
         log.info(
             "  FastF1: %s sesiones, %s metadata descargados (%s faltantes), %s tel descargados (%s skip, %s miss)",
@@ -390,7 +391,8 @@ def process_single_gp(
         )
 
     # Manifest
-    dest_dir = BRONZE_FASTF1 / str(year) / slug if year >= 2018 else BRONZE_ERGAST / str(year) / slug
+    use_fastf1 = mode == "full" and year >= 2018
+    dest_dir = BRONZE_FASTF1 / str(year) / slug if use_fastf1 else BRONZE_ERGAST / str(year) / slug
     write_manifest(dest_dir, year, round_num, slug, archive_res, fastf1_res)
 
     return {
@@ -405,7 +407,7 @@ def process_single_gp(
 # --------------------------------------------------------------------- main
 
 
-def main(years: list[int] | None = None, force: bool = False) -> None:
+def main(years: list[int] | None = None, force: bool = False, mode: str = "full") -> None:
     if years is None:
         years = list(range(YEAR_START, YEAR_END + 1))
 
@@ -426,6 +428,7 @@ def main(years: list[int] | None = None, force: bool = False) -> None:
     log.info("=" * 50)
     log.info("Total de GPs a procesar: %s", total)
     log.info("Workers: %s", MAX_DOWNLOAD_WORKERS)
+    log.info("Mode: %s", mode)
     log.info("=" * 50)
 
     start_time = time.time()
@@ -434,7 +437,7 @@ def main(years: list[int] | None = None, force: bool = False) -> None:
 
     with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as executor:
         future_to_gp = {
-            executor.submit(process_single_gp, year, rnd, name, force): (year, rnd, name)
+            executor.submit(process_single_gp, year, rnd, name, force, mode): (year, rnd, name)
             for year, rnd, name in gps_to_process
         }
 
@@ -469,7 +472,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Descarga capa bronce F1")
     parser.add_argument("--year", type=int, action="append", help="Ano especifico (se puede repetir)")
     parser.add_argument("--force", action="store_true", help="Forzar re-descarga de todo")
+    parser.add_argument("--mode", choices=["results_only", "full"], default="full", help="Modo de descarga")
     args = parser.parse_args()
 
     years = args.year if args.year else None
-    main(years=years, force=args.force)
+    main(years=years, force=args.force, mode=args.mode)

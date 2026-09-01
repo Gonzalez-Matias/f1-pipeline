@@ -31,7 +31,7 @@ def check_year_completeness(year: int, mode: str = "full", force: bool = False) 
             "existing_count": int,
             "expected_gps": list[dict],
             "missing_gps": list[dict],   # en calendario pero no en all
-            "extra_gps": list[int],      # en all pero no en calendario (rounds)
+            "extra_rounds": list[int],   # en all pero no en calendario (rounds)
         }
     """
     # 1. Calendario oficial
@@ -43,16 +43,17 @@ def check_year_completeness(year: int, mode: str = "full", force: bool = False) 
     expected_count = len(expected)
     expected_rounds = {gp["round"] for gp in expected}
 
-    # 2. Lo que ya existe en f1_all_results.parquet
+    # 2. Lo que ya existe en el consolidado correspondiente al modo.
+    #    results_only -> f1_all_results.parquet; full -> f1_all_full.parquet
+    target = OUTPUT_DIR / ("f1_all_full.parquet" if mode == "full" else "f1_all_results.parquet")
     existing_rounds = set()
-    all_results = OUTPUT_DIR / "f1_all_results.parquet"
-    if all_results.exists():
+    if target.exists():
         try:
-            df = pd.read_parquet(all_results)
+            df = pd.read_parquet(target)
             year_df = df[df["Year"] == year]
             existing_rounds = set(year_df["RoundNumber"].dropna().astype(int).unique())
         except Exception as e:
-            log.warning("Error leyendo %s: %s", all_results, e)
+            log.warning("Error leyendo %s: %s", target, e)
 
     existing_count = len(existing_rounds)
 

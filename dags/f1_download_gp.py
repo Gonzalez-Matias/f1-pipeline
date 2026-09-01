@@ -6,7 +6,6 @@ Descarga un Gran Premio específico y reconstruye los consolidados.
 **Parametros:**
 - `year` (int)
 - `round` (int)
-- `gp_slug` (str)
 - `mode` (str): `"results_only"` | `"full"`
 """
 from __future__ import annotations
@@ -16,7 +15,6 @@ from datetime import datetime, timedelta
 
 from airflow.decorators import dag, task
 from airflow.models.param import Param
-from airflow.operators.python import get_current_context
 
 from f1.download import get_schedule, process_single_gp
 from f1.silver import build_gp_silver, consolidate_all
@@ -43,7 +41,6 @@ default_args = {
     params={
         "year": Param(2024, type="integer"),
         "round": Param(1, type="integer"),
-        "gp_slug": Param("bahrain-grand-prix", type="string"),
         "mode": Param("full", type="string", enum=["results_only", "full"]),
     },
 )
@@ -65,7 +62,7 @@ def f1_download_gp():
             raise ValueError(f"GP {round_num} no encontrado en calendario {year}")
 
         log.info("[Download] %s/%s %s (mode=%s)", year, round_num, race_name, mode)
-        result = process_single_gp(year, round_num, race_name, force=False)
+        result = process_single_gp(year, round_num, race_name, force=False, mode=mode)
         return {
             "year": year,
             "round": round_num,

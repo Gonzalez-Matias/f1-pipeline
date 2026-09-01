@@ -21,7 +21,6 @@ from datetime import datetime, timedelta
 
 from airflow.decorators import dag, task
 from airflow.models.param import Param
-from airflow.operators.python import get_current_context
 
 from f1.download import get_schedule, process_single_gp
 from f1.silver import build_gp_silver, consolidate_all
@@ -96,8 +95,8 @@ def f1_download_year():
         mode = gp_info["mode"]
         force = context["params"]["force"]
 
-        log.info("[Download] %s/%s %s (force=%s)", year, round_num, race_name, force)
-        result = process_single_gp(year, round_num, race_name, force=force)
+        log.info("[Download] %s/%s %s (force=%s, mode=%s)", year, round_num, race_name, force, mode)
+        result = process_single_gp(year, round_num, race_name, force=force, mode=mode)
         return {
             "year": year,
             "round": round_num,
