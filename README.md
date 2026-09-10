@@ -49,7 +49,7 @@ Descarga y procesa un rango de temporadas.
 - `year_end` (int): última temporada (default: 2026)
 - `mode` (str): `"results_only"` | `"full"` (default: `"full"`)
   - `results_only`: solo resultados de carrera + clasificación + standings
-  - `full`: lo anterior + datos de prácticas (FP1/FP2/FP3) y telemetría (2018+)
+  - `full`: lo anterior + datos de prácticas (FP1/FP2/FP3) con telemetría para SOFT, MEDIUM, HARD, INTERMEDIATE, WET (2018+)
 - `force` (bool): reprocesar todo, incluso si ya está completo (default: `false`)
 
 **Outputs:**
@@ -96,7 +96,9 @@ f1-pipeline/
 
 - Los datos de prácticas (FastF1) solo están disponibles desde **2018** en adelante.
 - GPs futuros (sin `results.json`) se saltan automáticamente.
-- Las métricas de neumáticos **HARD** no se computan para prácticas (solo SOFT y MEDIUM).
+- Se descargan todas las vueltas MEDIUM + la vuelta más rápida absoluta (cualquier compuesto: SOFT, MEDIUM, HARD, INTERMEDIATE, WET).
+- En el dataset: `LapTime_min_*` existe para todos los compuestos; `LapTime_mean_*` solo para MEDIUM (que tiene múltiples vueltas).
+- Telemetría (`Throttle_mean_*`, `Speed_mean_*`, etc.) se calcula solo para MEDIUM.
 
 ## Limpiar y regenerar todo
 

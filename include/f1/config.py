@@ -34,7 +34,7 @@ ARCHIVE_FILES = [
 ]
 
 FASTF1_SESSIONS = ["Practice 1", "Practice 2", "Practice 3"]
-FASTF1_COMPOUNDS = {"SOFT", "MEDIUM", "HARD"}
+FASTF1_COMPOUNDS = {"SOFT", "MEDIUM", "HARD", "INTERMEDIATE", "WET"}
 
 HEADERS = {
     "User-Agent": (

@@ -329,13 +329,15 @@ def _parse_practice_session(
         driver_num = driver_mapping.get(driver_abbr, driver_abbr)
         row = {"DriverNumber": driver_num}
 
-        # Tiempos por compuesto (solo SOFT y MEDIUM; HARD no se usa en practicas)
-        for compound in ("SOFT", "MEDIUM"):
+        # Tiempos por compuesto (solo los que existen en los datos)
+        unique_compounds = set(l["compound"] for l in driver_laps)
+        for compound in unique_compounds:
             compound_laps = [l for l in driver_laps if l["compound"] == compound]
             if compound_laps:
                 times = [l["time"] for l in compound_laps]
                 row[f"{session_prefix}_LapTime_min_{compound}"] = min(times)
-                row[f"{session_prefix}_LapTime_mean_{compound}"] = sum(times) / len(times)
+                if compound == "MEDIUM":
+                    row[f"{session_prefix}_LapTime_mean_{compound}"] = sum(times) / len(times)
 
         abs_lap = min(driver_laps, key=lambda x: x["time"])
         tel_abs = _read_telemetry(str(session_dir), driver_abbr, abs_lap["lap"])
