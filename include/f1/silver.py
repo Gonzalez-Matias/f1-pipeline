@@ -336,7 +336,7 @@ def _parse_practice_session(
             if compound_laps:
                 times = [l["time"] for l in compound_laps]
                 row[f"{session_prefix}_LapTime_min_{compound}"] = min(times)
-                if compound == "MEDIUM":
+                if compound in ("SOFT", "MEDIUM"):
                     row[f"{session_prefix}_LapTime_mean_{compound}"] = sum(times) / len(times)
 
         abs_lap = min(driver_laps, key=lambda x: x["time"])

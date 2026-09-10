@@ -97,7 +97,7 @@ f1-pipeline/
 - Los datos de prácticas (FastF1) solo están disponibles desde **2018** en adelante.
 - GPs futuros (sin `results.json`) se saltan automáticamente.
 - Se descargan todas las vueltas MEDIUM + la vuelta más rápida absoluta (cualquier compuesto: SOFT, MEDIUM, HARD, INTERMEDIATE, WET).
-- En el dataset: `LapTime_min_*` existe para todos los compuestos; `LapTime_mean_*` solo para MEDIUM (que tiene múltiples vueltas).
+- En el dataset: `LapTime_min_*` existe para todos los compuestos; `LapTime_mean_*` solo para SOFT y MEDIUM (que tienen múltiples vueltas).
 - Telemetría (`Throttle_mean_*`, `Speed_mean_*`, etc.) se calcula solo para MEDIUM.
 
 ## Limpiar y regenerar todo
