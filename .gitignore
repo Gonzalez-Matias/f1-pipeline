@@ -6,6 +6,7 @@ __pycache__/
 
 # Airflow logs
 logs/
+plugins/
 
 # Datos generados (se recrean con el pipeline)
 include/output/

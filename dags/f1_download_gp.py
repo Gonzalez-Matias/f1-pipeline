@@ -65,7 +65,6 @@ def f1_download_gp():
         result = process_single_gp(year, round_num, race_name, force=False, mode=mode)
         return {
             "year": year,
-            "round": round_num,
             "slug": result["slug"],
             "mode": mode,
         }
@@ -73,19 +72,12 @@ def f1_download_gp():
     @task
     def build(bronze_result: dict, **context) -> dict:
         year = bronze_result["year"]
-        round_num = bronze_result["round"]
         slug = bronze_result["slug"]
         mode = bronze_result["mode"]
 
         log.info("[Silver] %s/%s (mode=%s)", year, slug, mode)
-        paths = build_gp_silver(year, round_num, slug, mode=mode)
-        return {
-            "year": year,
-            "round": round_num,
-            "slug": slug,
-            "mode": mode,
-            "paths": paths,
-        }
+        build_gp_silver(year, slug, mode=mode)
+        return {"mode": mode}
 
     @task
     def consolidate(silver_result: dict, **context) -> dict:

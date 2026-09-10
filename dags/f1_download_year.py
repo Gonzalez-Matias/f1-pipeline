@@ -40,15 +40,15 @@ default_args = {
 @dag(
     dag_id="f1_download_year",
     default_args=default_args,
-    description="Descarga rango de anos F1",
+    description="Descarga rango de años F1",
     schedule=None,
     start_date=datetime(2024, 1, 1),
     catchup=False,
     max_active_tasks=8,
     tags=["f1", "bronze", "silver"],
     params={
-        "year_start": Param(2000, type="integer", description="Primer ano (inclusive)"),
-        "year_end":   Param(2026, type="integer", description="Ultimo ano (inclusive)"),
+        "year_start": Param(2000, type="integer", description="Primer año (inclusive)"),
+        "year_end":   Param(2026, type="integer", description="Ultimo año (inclusive)"),
         "mode":       Param("full", type="string", enum=["results_only", "full"]),
         "force":      Param(False, type="boolean", description="Re-descargar aunque este completo"),
     },
@@ -70,8 +70,8 @@ def f1_download_year():
                 continue
 
             schedule = get_schedule(year)
-            if check["missing_gps"]:
-                missing_rounds = {gp["round"] for gp in check["missing_gps"]}
+            if check["missing_rounds"]:
+                missing_rounds = set(check["missing_rounds"])
                 to_download = [gp for gp in schedule if gp["round"] in missing_rounds]
             else:
                 to_download = schedule
@@ -99,7 +99,6 @@ def f1_download_year():
         result = process_single_gp(year, round_num, race_name, force=force, mode=mode)
         return {
             "year": year,
-            "round": round_num,
             "slug": result["slug"],
             "mode": mode,
         }
@@ -107,19 +106,12 @@ def f1_download_year():
     @task
     def build(gp_info: dict, **context) -> dict:
         year = gp_info["year"]
-        round_num = gp_info["round"]
         slug = gp_info["slug"]
         mode = gp_info["mode"]
 
         log.info("[Silver] %s/%s", year, slug)
-        paths = build_gp_silver(year, round_num, slug, mode=mode)
-        return {
-            "year": year,
-            "round": round_num,
-            "slug": slug,
-            "mode": mode,
-            "paths": paths,
-        }
+        build_gp_silver(year, slug, mode=mode)
+        return {"mode": mode}
 
     @task(trigger_rule="none_failed_min_one_success")
     def consolidate(gp_results: list[dict], **context) -> dict:
@@ -128,22 +120,13 @@ def f1_download_year():
         paths = consolidate_all(mode=mode, cleanup=True)
         return {"mode": mode, "paths": paths}
 
-    @task(trigger_rule="none_failed")
-    def skip_notice(gps: list[dict], **context) -> dict:
-        """No-op cuando no hay nada que descargar."""
-        log.info("Nada que descargar en el rango.")
-        return {}
-
     # Flujo
     gps = discover_range()
 
-    # Branch: si hay GPs, descarga; si no, skip
     downloaded = download.expand(gp_info=gps)
     built = build.expand(gp_info=downloaded)
     consolidated = consolidate(built)
-    skipped = skip_notice(gps)
 
-    gps >> [downloaded, skipped]
     downloaded >> built >> consolidated
 
 

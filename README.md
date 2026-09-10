@@ -10,9 +10,24 @@ Pipeline de datos para Formula 1 usando Apache Airflow. Descarga datos históric
 ## Levantar el proyecto
 
 ```bash
-cd airflow-f1
-docker-compose up -d
+cd f1-pipeline
+./setup.sh
 ```
+
+`setup.sh` genera el `.env` con tu UID y levanta la pila (`docker-compose up -d --build`).
+
+Alternativa manual (equivale a lo que hace `setup.sh`):
+
+```bash
+cd f1-pipeline
+echo -e "AIRFLOW_UID=$(id -u)" > .env   # que Airflow corra con tu usuario (evita errores de permisos)
+docker-compose up -d --build
+```
+
+> En Linux es necesario generar `.env` con `AIRFLOW_UID=$(id -u)` antes de
+> levantar. Sin eso, `logs/` y `plugins/` se crean como `root` y los
+> contenedores (que corren con un usuario no-root) no pueden escribir, lo que
+> rompe el procesador de DAGs.
 
 Esperar a que los servicios estén healthy (unos 30 segundos).
 
@@ -20,6 +35,9 @@ Esperar a que los servicios estén healthy (unos 30 segundos).
 
 - **Airflow UI:** http://localhost:8080
 - **Usuario:** `admin` / **Password:** `admin`
+
+> Los DAGs se crean **pausados** (`DAGS_ARE_PAUSED_AT_CREATION=true`).
+> Activá el toggle en la UI o disparalos manualmente con el botón play.
 
 ## DAGs disponibles
 
@@ -39,12 +57,17 @@ Descarga y procesa un rango de temporadas.
 - `include/output/f1_all_full.parquet` — solo si `mode="full"`
 
 ### `f1_download_gp`
-Descarga un único GP por año y round.
+Descarga y procesa un único Gran Premio.
+
+**Parámetros:**
+- `year` (int): temporada
+- `round` (int): número de ronda del GP (según calendario)
+- `mode` (str): `"results_only"` | `"full"` (default: `"full"`)
 
 ## Estructura
 
 ```
-airflow-f1/
+f1-pipeline/
 ├── dags/                 # DAGs de Airflow
 │   ├── f1_download_year.py
 │   └── f1_download_gp.py
@@ -53,15 +76,19 @@ airflow-f1/
 │   │   ├── __init__.py
 │   │   ├── config.py    # Configuración central
 │   │   ├── download.py  # Descarga de datos crudos (bronze)
+│   │   ├── laps.py      # Filtrado de vueltas FastF1 (compartido)
 │   │   ├── silver.py    # Procesamiento y features (silver)
 │   │   └── validate.py  # Validación de completitud
 │   └── output/          # Datos generados (no se versiona)
-│       ├── bronze/      # JSON crudo
-│       └── silver/      # Parquets consolidados
+│       ├── bronze/      # JSON crudo (ergast/ y fastf1/)
+│       ├── silver/_parciales/  # Parquets por GP (temporales, se borran)
+│       ├── f1_all_results.parquet   # output final (siempre)
+│       └── f1_all_full.parquet      # output final (si mode="full")
 ├── notebooks/
 │   └── explorar_parquet_f1.ipynb
 ├── docker-compose.yml
 ├── Dockerfile
+├── setup.sh
 └── requirements.txt
 ```
 

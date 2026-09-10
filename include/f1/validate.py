@@ -7,12 +7,12 @@ en los consolidados f1_all_*.parquet y en bronce.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 import pandas as pd
 
 from f1.config import OUTPUT_DIR
-from f1.download import get_schedule, slugify
+from f1.download import get_schedule
+from f1.laps import slugify
 
 log = logging.getLogger(__name__)
 
@@ -29,8 +29,7 @@ def check_year_completeness(year: int, mode: str = "full", force: bool = False) 
             "status": "complete" | "partial" | "missing" | "empty",
             "expected_count": int,
             "existing_count": int,
-            "expected_gps": list[dict],
-            "missing_gps": list[dict],   # en calendario pero no en all
+            "missing_rounds": list[int],  # en calendario pero no en all
             "extra_rounds": list[int],   # en all pero no en calendario (rounds)
         }
     """
@@ -77,8 +76,7 @@ def check_year_completeness(year: int, mode: str = "full", force: bool = False) 
         "status": status,
         "expected_count": expected_count,
         "existing_count": existing_count,
-        "expected_gps": expected,
-        "missing_gps": missing,
+        "missing_rounds": [gp["round"] for gp in missing],
         "extra_rounds": extra,
     }
 
@@ -105,7 +103,7 @@ def should_download(year: int, mode: str = "full", force: bool = False) -> dict:
         check["should_download"] = False
         check["reason"] = "complete"
     else:
-        log.info("%s necesita descarga: %s GPs faltantes", year, len(check["missing_gps"]))
+        log.info("%s necesita descarga: %s GPs faltantes", year, len(check["missing_rounds"]))
         check["should_download"] = True
         check["reason"] = check["status"]
 

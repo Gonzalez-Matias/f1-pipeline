@@ -19,22 +19,19 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 
 from f1.config import (
     BRONZE_ERGAST,
     BRONZE_FASTF1,
-    FASTF1_COMPOUNDS,
     FASTF1_SESSIONS,
     OUTPUT_DIR,
     PARTIALS_DIR,
-    SILVER_DIR,
 )
+from f1.laps import filter_outliers, valid_laps
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +40,7 @@ log = logging.getLogger(__name__)
 
 
 def parse_archive_gp(year: int, gp_slug: str) -> pd.DataFrame:
-    """Lee los 7 JSON de Archive y devuelve DataFrame base."""
+    """Lee los JSON de Archive y devuelve DataFrame base."""
     base_dir = BRONZE_ERGAST / str(year) / gp_slug
 
     # --- results.json ---
@@ -269,7 +266,7 @@ def parse_fastf1_gp(year: int, gp_slug: str) -> pd.DataFrame:
         if not laptimes_path.exists():
             continue
 
-        df_session = _parse_practice_session(laptimes_path, session, year, gp_slug)
+        df_session = _parse_practice_session(laptimes_path, session)
         if not df_session.empty:
             all_features.append(df_session)
 
@@ -304,7 +301,7 @@ def _load_driver_mapping(session_dir: Path) -> dict[str, str]:
 
 
 def _parse_practice_session(
-    laptimes_path: Path, session_name: str, year: int, gp_slug: str
+    laptimes_path: Path, session_name: str
 ) -> pd.DataFrame:
     """Parsea una sesion de practica y calcula features."""
     session_dir = laptimes_path.parent
@@ -313,73 +310,11 @@ def _parse_practice_session(
     with open(laptimes_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    if not isinstance(data, dict):
+    laps = valid_laps(data)
+    if not laps:
         return pd.DataFrame()
 
-    n = len(data.get("lap", []))
-    if n == 0:
-        return pd.DataFrame()
-
-    def val(key, i):
-        v = data.get(key, [])
-        return v[i] if i < len(v) else None
-
-    laps = []
-    for i in range(n):
-        compound = val("compound", i)
-        if compound not in FASTF1_COMPOUNDS:
-            continue
-
-        lap_time = val("time", i)
-        if lap_time == "None" or lap_time is None:
-            continue
-
-        pin = val("pin", i)
-        pout = val("pout", i)
-        if pin != "None" or pout != "None":
-            continue
-
-        status = val("status", i)
-        if status != "1":
-            continue
-
-        iacc = val("iacc", i)
-        if iacc is not True:
-            continue
-
-        vfl = val("vfl", i)
-        if vfl == "None" or vfl is None:
-            continue
-        try:
-            if float(vfl) < 100:
-                continue
-        except:
-            continue
-
-        deleted = val("del", i)
-        if deleted is True:
-            continue
-
-        laps.append({
-            "driver": val("drv", i),
-            "lap": int(val("lap", i)) if val("lap", i) is not None else None,
-            "compound": compound,
-            "time": float(lap_time),
-            "session_dir": str(laptimes_path.parent),
-        })
-
-    grouped = defaultdict(list)
-    for l in laps:
-        grouped[(l["driver"], l["compound"])].append(l)
-
-    filtered = []
-    for key, group_laps in grouped.items():
-        min_time = min(l["time"] for l in group_laps)
-        threshold = min_time * 1.05
-        for l in group_laps:
-            if l["time"] <= threshold:
-                filtered.append(l)
-
+    filtered = filter_outliers(laps)
     if not filtered:
         return pd.DataFrame()
 
@@ -403,7 +338,7 @@ def _parse_practice_session(
                 row[f"{session_prefix}_LapTime_mean_{compound}"] = sum(times) / len(times)
 
         abs_lap = min(driver_laps, key=lambda x: x["time"])
-        tel_abs = _read_telemetry(abs_lap["session_dir"], driver_abbr, abs_lap["lap"])
+        tel_abs = _read_telemetry(str(session_dir), driver_abbr, abs_lap["lap"])
         if tel_abs:
             row[f"{session_prefix}_Throttle_abs"] = tel_abs["throttle"]
             row[f"{session_prefix}_Speed_abs"] = tel_abs["speed"]
@@ -414,7 +349,7 @@ def _parse_practice_session(
         if medium_laps:
             tel_values = {"throttle": [], "speed": [], "rpm": [], "brake": []}
             for l in medium_laps:
-                tel = _read_telemetry(l["session_dir"], driver_abbr, l["lap"])
+                tel = _read_telemetry(str(session_dir), driver_abbr, l["lap"])
                 if tel:
                     for k in tel_values:
                         if tel[k] is not None:
@@ -453,12 +388,14 @@ def _read_telemetry(session_dir: str, driver: str, lap_num: int) -> dict | None:
         rpm = tel.get("rpm", [])
         brake = tel.get("brake", [])
 
+        # Filtra valores de acelerador fuera del rango fisico [0, 100].
         throttle_valid = [t for t in throttle if 0 <= t <= 100]
 
         return {
             "throttle": sum(throttle_valid) / len(throttle_valid) if throttle_valid else None,
             "speed": sum(speed) / len(speed) if speed else None,
             "rpm": sum(rpm) / len(rpm) if rpm else None,
+            # brake viene en [0, 1]; se escala a porcentaje.
             "brake": sum(brake) / len(brake) * 100 if brake else None,
         }
     except Exception:
@@ -488,7 +425,7 @@ def _reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df[[c for c in final_cols if c in df.columns]]
 
 
-def build_gp_silver(year: int, round_num: int, gp_slug: str, mode: str = "full") -> dict[str, str]:
+def build_gp_silver(year: int, gp_slug: str, mode: str = "full") -> dict[str, str]:
     """
     Construye el DataFrame de plata para un GP.
     
@@ -541,48 +478,6 @@ def _save_gp_silver(year: int, gp_slug: str, df: pd.DataFrame, suffix: str) -> s
 # ------------------------------------------------------------------- consolidate
 
 
-def consolidate_year(year: int, mode: str = "full") -> dict[str, str]:
-    """
-    Une todos los GPs de un ano en uno o dos parquet segun mode.
-    
-    Returns:
-        Dict con rutas de consolidados generados.
-    """
-    result_paths = {}
-    partials_dir = PARTIALS_DIR / str(year)
-
-    if not partials_dir.exists():
-        log.warning("No hay datos en Plata para %s", year)
-        return result_paths
-
-    # Consolidar _results (siempre)
-    result_files = sorted(partials_dir.glob("*_results.parquet"))
-    if result_files:
-        dfs = [pd.read_parquet(f) for f in result_files]
-        df = pd.concat(dfs, ignore_index=True)
-        dest = SILVER_DIR / f"f1_{year}_results.parquet"
-        df.to_parquet(dest, index=False)
-        log.info("Consolidado %s results: %s filas x %s columnas -> %s", year, len(df), len(df.columns), dest)
-        result_paths["results"] = str(dest)
-    else:
-        log.warning("No hay archivos _results para %s", year)
-
-    # Consolidar _full (solo si mode='full')
-    if mode == "full":
-        full_files = sorted(partials_dir.glob("*_full.parquet"))
-        if full_files:
-            dfs = [pd.read_parquet(f) for f in full_files]
-            df = pd.concat(dfs, ignore_index=True)
-            dest = SILVER_DIR / f"f1_{year}_full.parquet"
-            df.to_parquet(dest, index=False)
-            log.info("Consolidado %s full: %s filas x %s columnas -> %s", year, len(df), len(df.columns), dest)
-            result_paths["full"] = str(dest)
-        else:
-            log.info("No hay archivos _full para %s", year)
-
-    return result_paths
-
-
 def _upsert_parquet(existing_path: Path, new_df: pd.DataFrame) -> pd.DataFrame:
     """Combina new_df con el parquet existente.
 
@@ -603,6 +498,8 @@ def _upsert_parquet(existing_path: Path, new_df: pd.DataFrame) -> pd.DataFrame:
 
     existing = pd.read_parquet(existing_path)
 
+    # Clave (Year, RoundNumber): conserva del historico las filas cuyo GP
+    # no esta en new_df, y las reemplaza por las nuevas cuando coincide.
     new_keys = pd.MultiIndex.from_frame(
         new_df[["Year", "RoundNumber"]].astype(str)
     )
@@ -668,52 +565,3 @@ def consolidate_all(mode: str = "full", cleanup: bool = True) -> dict[str, str]:
 
     return result_paths
 
-
-# ------------------------------------------------------------------- main (CLI backward compat)
-
-
-def main(years: list[int] | None = None, mode: str = "full") -> None:
-    if years is None:
-        years = list(range(2000, 2027))
-
-    for year in years:
-        log.info("=" * 50)
-        log.info("Procesando ano %s (mode=%s)", year, mode)
-
-        if year >= 2018:
-            base_dir = BRONZE_FASTF1 / str(year)
-        else:
-            base_dir = BRONZE_ERGAST / str(year)
-
-        if not base_dir.exists():
-            log.warning("No hay datos en Bronce para %s", year)
-            continue
-
-        gp_slugs = sorted([d.name for d in base_dir.iterdir() if d.is_dir()])
-        log.info("%s GPs en bronce para %s", len(gp_slugs), year)
-
-        for gp_slug in gp_slugs:
-            round_num = _get_round_from_slug(year, gp_slug)
-            build_gp_silver(year, round_num, gp_slug, mode=mode)
-
-        consolidate_year(year, mode=mode)
-
-    consolidate_all(mode=mode)
-
-
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%H:%M:%S",
-    )
-
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Construye capa plata F1")
-    parser.add_argument("--year", type=int, action="append", help="Ano especifico")
-    parser.add_argument("--mode", choices=["results_only", "full"], default="full", help="Modo de construccion")
-    args = parser.parse_args()
-
-    years = args.year if args.year else None
-    main(years=years, mode=args.mode)

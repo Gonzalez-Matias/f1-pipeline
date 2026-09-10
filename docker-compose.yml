@@ -47,7 +47,7 @@ services:
       - -c
       - |
         mkdir -p /opt/airflow/logs /opt/airflow/dags /opt/airflow/plugins /opt/airflow/include/output
-        chown -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins,include}
+        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/{logs,dags,plugins,include}
         airflow db init
         airflow users create \
           --username admin \
@@ -55,7 +55,7 @@ services:
           --lastname User \
           --role Admin \
           --email admin@example.com \
-          --password admin
+          --password admin || true
     environment:
       <<: *airflow-common-env
     user: "0:0"

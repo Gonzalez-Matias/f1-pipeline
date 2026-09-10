@@ -29,11 +29,8 @@ RAW_BASE = "https://raw.githubusercontent.com"
 ARCHIVE_FILES = [
     "quali_results.json",
     "results.json",
-    "laptimes.json",
-    "pitstops.json",
     "driverPoints.json",
     "teamPoints.json",
-    "event_info.json",
 ]
 
 FASTF1_SESSIONS = ["Practice 1", "Practice 2", "Practice 3"]
@@ -49,7 +46,3 @@ HEADERS = {
 RETRIES = 3
 TIMEOUT = 30
 SLEEP_BETWEEN_REQUESTS = 0.1
-MAX_DOWNLOAD_WORKERS = 8
-
-YEAR_START = 2000
-YEAR_END = 2026
