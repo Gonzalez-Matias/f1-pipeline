@@ -53,8 +53,8 @@ Descarga y procesa un rango de temporadas.
 - `force` (bool): reprocesar todo, incluso si ya está completo (default: `false`)
 
 **Outputs:**
-- `include/output/f1_all_results.parquet` — siempre
-- `include/output/f1_all_full.parquet` — solo si `mode="full"`
+- `include/output/f1_all_results.csv` — siempre
+- `include/output/f1_all_full.csv` — solo si `mode="full"`
 
 ### `f1_download_gp`
 Descarga y procesa un único Gran Premio.
@@ -82,8 +82,8 @@ f1-pipeline/
 │   └── output/          # Datos generados (no se versiona)
 │       ├── bronze/      # JSON crudo (ergast/ y fastf1/)
 │       ├── silver/_parciales/  # Parquets por GP (temporales, se borran)
-│       ├── f1_all_results.parquet   # output final (siempre)
-│       └── f1_all_full.parquet      # output final (si mode="full")
+│       ├── f1_all_results.csv       # output final (siempre)
+│       └── f1_all_full.csv          # output final (si mode="full")
 ├── notebooks/
 │   └── explorar_parquet_f1.ipynb
 ├── docker-compose.yml

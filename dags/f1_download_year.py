@@ -11,8 +11,8 @@ si ya estan completos en el consolidado historico.
 - `force`      (bool): re-descargar aunque este completo
 
 **Salida:**
-- `silver/f1_all_results.parquet`
-- `silver/f1_all_full.parquet` (si mode="full")
+- `silver/f1_all_results.csv`
+- `silver/f1_all_full.csv` (si mode="full")
 """
 from __future__ import annotations
 

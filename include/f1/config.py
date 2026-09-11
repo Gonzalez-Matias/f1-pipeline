@@ -6,8 +6,8 @@ Estructura tipo medallon (patron FIFA):
     bronze/ergast/     ← JSON crudo Archive (persistente, append-only)
     bronze/fastf1/     ← metadata + tel FastF1 (persistente, append-only)
     silver/_parciales/ ← parquets por GP (temporales, se borran tras consolidar)
-    f1_all_results.parquet  ← output final
-    f1_all_full.parquet     ← output final (si mode=full)
+    f1_all_results.csv  ← output final
+    f1_all_full.csv     ← output final (si mode=full)
 """
 from pathlib import Path
 import os

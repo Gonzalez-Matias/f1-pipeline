@@ -5,15 +5,13 @@ Soporta dos modos:
   - results_only: solo columnas Archive (Ergast)
   - full: Archive + FastF1 (telemetria de practicas)
 
-Para cada GP genera:
+Para cada GP genera (parciales, formato interno en parquet):
   - {gp_slug}_results.parquet  (siempre)
   - {gp_slug}_full.parquet     (solo si mode='full')
 
-Consolidados:
-  - f1_{year}_results.parquet  (siempre)
-  - f1_{year}_full.parquet     (solo si mode='full')
-  - f1_all_results.parquet     (siempre)
-  - f1_all_full.parquet        (solo si mode='full')
+Consolidados (formato final en CSV):
+  - f1_all_results.csv     (siempre)
+  - f1_all_full.csv        (solo si mode='full')
 """
 from __future__ import annotations
 
@@ -480,8 +478,8 @@ def _save_gp_silver(year: int, gp_slug: str, df: pd.DataFrame, suffix: str) -> s
 # ------------------------------------------------------------------- consolidate
 
 
-def _upsert_parquet(existing_path: Path, new_df: pd.DataFrame) -> pd.DataFrame:
-    """Combina new_df con el parquet existente.
+def _upsert_table(existing_path: Path, new_df: pd.DataFrame) -> pd.DataFrame:
+    """Combina new_df con el consolidado CSV existente.
 
     Reemplaza las filas de los GPs presentes en new_df (identificados por
     Year + RoundNumber) y conserva el resto del historico. Evita la perdida
@@ -489,16 +487,16 @@ def _upsert_parquet(existing_path: Path, new_df: pd.DataFrame) -> pd.DataFrame:
     """
     if new_df.empty:
         if existing_path.exists():
-            return pd.read_parquet(existing_path)
+            return pd.read_csv(existing_path, sep=';')
         return new_df
 
     if not existing_path.exists():
         return new_df
 
     if "Year" not in new_df.columns or "RoundNumber" not in new_df.columns:
-        return pd.concat([pd.read_parquet(existing_path), new_df], ignore_index=True)
+        return pd.concat([pd.read_csv(existing_path, sep=';'), new_df], ignore_index=True)
 
-    existing = pd.read_parquet(existing_path)
+    existing = pd.read_csv(existing_path, sep=';')
 
     # Clave (Year, RoundNumber): conserva del historico las filas cuyo GP
     # no esta en new_df, y las reemplaza por las nuevas cuando coincide.
@@ -516,8 +514,9 @@ def _upsert_parquet(existing_path: Path, new_df: pd.DataFrame) -> pd.DataFrame:
 
 def consolidate_all(mode: str = "full", cleanup: bool = True) -> dict[str, str]:
     """
-    Une TODOS los GPs de TODOS los anos en uno o dos parquet.
-    Lee de silver/_parciales/, escribe en output/, y limpia parciales.
+    Une TODOS los GPs de TODOS los anos en uno o dos CSV consolidados.
+    Lee de silver/_parciales/ (parquet, formato interno temporal), escribe
+    en output/ como CSV, y limpia parciales.
 
     Hace upsert sobre el consolidado existente para no perder anos que no
     estan en los parciales actuales (p.ej. al correr un rango parcial).
@@ -533,10 +532,10 @@ def consolidate_all(mode: str = "full", cleanup: bool = True) -> dict[str, str]:
         new_df = pd.concat(
             [pd.read_parquet(f) for f in all_result_files], ignore_index=True
         )
-        dest = OUTPUT_DIR / "f1_all_results.parquet"
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        df = _upsert_parquet(dest, new_df)
-        df.to_parquet(dest, index=False)
+        dest = OUTPUT_DIR / "f1_all_results.csv"
+        df = _upsert_table(dest, new_df)
+        df.to_csv(dest, index=False, sep=';')
         log.info("Consolidado all results: %s GPs nuevos, %s filas x %s columnas -> %s",
                  len(all_result_files), len(df), len(df.columns), dest)
         result_paths["results"] = str(dest)
@@ -550,9 +549,10 @@ def consolidate_all(mode: str = "full", cleanup: bool = True) -> dict[str, str]:
             new_df = pd.concat(
                 [pd.read_parquet(f) for f in all_full_files], ignore_index=True
             )
-            dest = OUTPUT_DIR / "f1_all_full.parquet"
-            df = _upsert_parquet(dest, new_df)
-            df.to_parquet(dest, index=False)
+            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            dest = OUTPUT_DIR / "f1_all_full.csv"
+            df = _upsert_table(dest, new_df)
+            df.to_csv(dest, index=False, sep=';')
             log.info("Consolidado all full: %s GPs nuevos, %s filas x %s columnas -> %s",
                      len(all_full_files), len(df), len(df.columns), dest)
             result_paths["full"] = str(dest)

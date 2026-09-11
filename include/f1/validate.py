@@ -43,12 +43,18 @@ def check_year_completeness(year: int, mode: str = "full", force: bool = False) 
     expected_rounds = {gp["round"] for gp in expected}
 
     # 2. Lo que ya existe en el consolidado correspondiente al modo.
-    #    results_only -> f1_all_results.parquet; full -> f1_all_full.parquet
-    target = OUTPUT_DIR / ("f1_all_full.parquet" if mode == "full" else "f1_all_results.parquet")
+    #    results_only -> f1_all_results.*; full -> f1_all_full.*
+    #    consolidate_all() escribe en CSV, pero se acepta tambien un
+    #    consolidado .parquet preexistente de antes de este cambio.
+    base_name = "f1_all_full" if mode == "full" else "f1_all_results"
+    target = next(
+        (p for p in (OUTPUT_DIR / f"{base_name}.parquet", OUTPUT_DIR / f"{base_name}.csv") if p.exists()),
+        OUTPUT_DIR / f"{base_name}.parquet",
+    )
     existing_rounds = set()
     if target.exists():
         try:
-            df = pd.read_parquet(target)
+            df = pd.read_csv(target, sep=";") if target.suffix == ".csv" else pd.read_parquet(target)
             year_df = df[df["Year"] == year]
             existing_rounds = set(year_df["RoundNumber"].dropna().astype(int).unique())
         except Exception as e:
