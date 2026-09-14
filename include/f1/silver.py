@@ -4,8 +4,8 @@ Construye la capa Plata a partir de la capa Bronce.
 Para cada GP genera (parciales, formato interno en parquet):
   - {gp_slug}_full.parquet
 
-Consolidado (formato final en CSV):
-  - f1_all_full.csv
+Consolidado (formato final en Parquet):
+  - f1_all_full.parquet
 """
 from __future__ import annotations
 
@@ -238,7 +238,7 @@ def _get_round_from_slug(year: int, gp_slug: str) -> int:
                 with open(manifest_path) as f:
                     m = json.load(f)
                 return m.get("round", 0)
-            except:
+            except Exception:
                 continue
     return 0
 
@@ -312,7 +312,7 @@ def parse_fastf1_gp(year: int, gp_slug: str) -> pd.DataFrame:
 
         # Telemetria de la unica vuelta mas rapida del fin de semana
         best_session_dir, best_lap = min(entries, key=lambda e: e[1]["time"])
-        tel_abs = _read_telemetry(str(best_session_dir), driver_abbr, best_lap["lap"])
+        tel_abs = _read_telemetry(best_session_dir, driver_abbr, best_lap["lap"])
         if tel_abs:
             row["FP_Throttle_fastlap"] = tel_abs["throttle"]
             row["FP_Speed_fastlap"] = tel_abs["speed"]
@@ -325,7 +325,7 @@ def parse_fastf1_gp(year: int, gp_slug: str) -> pd.DataFrame:
         if medium_entries:
             tel_values = {"throttle": [], "speed": [], "rpm": [], "brake": []}
             for session_dir, lap in medium_entries:
-                tel = _read_telemetry(str(session_dir), driver_abbr, lap["lap"])
+                tel = _read_telemetry(session_dir, driver_abbr, lap["lap"])
                 if tel:
                     for k in tel_values:
                         if tel[k] is not None:
@@ -365,9 +365,9 @@ def _load_driver_mapping(session_dir: Path) -> dict[str, str]:
         return {}
 
 
-def _read_telemetry(session_dir: str, driver: str, lap_num: int) -> dict | None:
+def _read_telemetry(session_dir: Path, driver: str, lap_num: int) -> dict | None:
     """Lee tel.json de bronce y calcula promedios."""
-    path = Path(session_dir) / driver / f"{lap_num}_tel.json"
+    path = session_dir / driver / f"{lap_num}_tel.json"
     if not path.exists():
         return None
 
@@ -430,8 +430,7 @@ def _reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
         + race_cols
     )
     remaining = [c for c in df.columns if c not in ordered]
-    final_cols = ordered + remaining
-    return df[[c for c in final_cols if c in df.columns]]
+    return df[ordered + remaining]
 
 
 def _add_abs_dbt(df: pd.DataFrame) -> pd.DataFrame:
@@ -516,7 +515,7 @@ def _save_gp_silver(year: int, gp_slug: str, df: pd.DataFrame, suffix: str) -> s
 
 
 def _upsert_table(existing_path: Path, new_df: pd.DataFrame) -> pd.DataFrame:
-    """Combina new_df con el consolidado CSV existente.
+    """Combina new_df con el consolidado Parquet existente.
 
     Reemplaza las filas de los GPs presentes en new_df (identificados por
     Year + RoundNumber) y conserva el resto del historico. Evita la perdida
@@ -524,16 +523,16 @@ def _upsert_table(existing_path: Path, new_df: pd.DataFrame) -> pd.DataFrame:
     """
     if new_df.empty:
         if existing_path.exists():
-            return pd.read_csv(existing_path, sep=';')
+            return pd.read_parquet(existing_path)
         return new_df
 
     if not existing_path.exists():
         return new_df
 
     if "Year" not in new_df.columns or "RoundNumber" not in new_df.columns:
-        return pd.concat([pd.read_csv(existing_path, sep=';'), new_df], ignore_index=True)
+        return pd.concat([pd.read_parquet(existing_path), new_df], ignore_index=True)
 
-    existing = pd.read_csv(existing_path, sep=';')
+    existing = pd.read_parquet(existing_path)
 
     # Clave (Year, RoundNumber): conserva del historico las filas cuyo GP
     # no esta en new_df, y las reemplaza por las nuevas cuando coincide.
@@ -587,9 +586,9 @@ def _add_pre_race_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def consolidate_all(cleanup: bool = True) -> dict[str, str]:
     """
-    Une TODOS los GPs de TODOS los anos en un CSV consolidado.
+    Une TODOS los GPs de TODOS los anos en un Parquet consolidado.
     Lee de silver/_parciales/ (parquet, formato interno temporal), escribe
-    en output/ como CSV, y limpia parciales.
+    en output/ como Parquet, y limpia parciales.
 
     Hace upsert sobre el consolidado existente para no perder anos que no
     estan en los parciales actuales (p.ej. al correr un rango parcial).
@@ -606,10 +605,10 @@ def consolidate_all(cleanup: bool = True) -> dict[str, str]:
             [pd.read_parquet(f) for f in all_full_files], ignore_index=True
         )
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        dest = OUTPUT_DIR / "f1_all_full.csv"
+        dest = OUTPUT_DIR / "f1_all_full.parquet"
         df = _upsert_table(dest, new_df)
         df = _add_pre_race_features(df)
-        df.to_csv(dest, index=False, sep=';')
+        df.to_parquet(dest, index=False)
         log.info("Consolidado all full: %s GPs nuevos, %s filas x %s columnas -> %s",
                  len(all_full_files), len(df), len(df.columns), dest)
         result_paths["full"] = str(dest)

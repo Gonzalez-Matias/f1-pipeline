@@ -10,7 +10,7 @@ si ya estan completos en el consolidado historico.
 - `force`      (bool): re-descargar aunque este completo
 
 **Salida:**
-- `silver/f1_all_full.csv`
+- `silver/f1_all_full.parquet`
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from airflow.decorators import dag, task
 from airflow.models.param import Param
 
-from f1.download import get_schedule, process_single_gp
+from f1.download import process_single_gp
 from f1.silver import build_gp_silver, consolidate_all
 from f1.validate import should_download
 
@@ -65,18 +65,18 @@ def f1_download_year():
             if not check["should_download"]:
                 continue
 
-            schedule = get_schedule(year)
+            expected = check["expected"]
             if check["missing_rounds"]:
                 missing_rounds = set(check["missing_rounds"])
-                to_download = [gp for gp in schedule if gp["round"] in missing_rounds]
+                to_download = [gp for gp in expected if gp["round"] in missing_rounds]
             else:
-                to_download = schedule
+                to_download = expected
 
             for gp in to_download:
                 all_gps.append({
                     "year": year,
                     "round": gp["round"],
-                    "race_name": gp["race_name"],
+                    "race_name": gp["name"],
                 })
 
         log.info("Rango %s-%s: %s GPs a descargar", year_start, year_end, len(all_gps))

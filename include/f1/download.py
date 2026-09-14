@@ -246,8 +246,18 @@ def download_gp_fastf1(year: int, race_name: str, force: bool = False) -> dict:
         laptimes_path = session_dir / "session_laptimes.json"
         vueltas_abs, vueltas_medium = filter_session_laps(laptimes_path)
 
+        # Deduplicar por (driver, lap): la vuelta más rápida puede ser MEDIUM.
         laps_to_download = list(vueltas_abs.values())
         laps_to_download.extend(vueltas_medium)
+        seen = set()
+        unique = []
+        for lap in laps_to_download:
+            key = (lap["driver"], lap["lap"])
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(lap)
+        laps_to_download = unique
 
         if laps_to_download:
             tel_res = download_telemetry_laps(

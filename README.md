@@ -1,6 +1,6 @@
 # F1 Data Pipeline
 
-Pipeline de datos para Formula 1 usando Apache Airflow. Descarga datos históricos de carreras (2018-2026) desde repositorios públicos de GitHub (TracingInsights), los procesa en capas tipo medallón (bronze → silver) y genera un dataset consolidado en CSV.
+Pipeline de datos para Formula 1 usando Apache Airflow. Descarga datos históricos de carreras (2018-2026) desde repositorios públicos de GitHub (TracingInsights), los procesa en capas tipo medallón (bronze → silver) y genera un dataset consolidado en Parquet.
 
 ## Requisitos
 
@@ -50,7 +50,7 @@ Descarga y procesa un rango de temporadas.
 - `force` (bool): reprocesar todo, incluso si ya está completo (default: `false`)
 
 **Outputs:**
-- `include/output/f1_all_full.csv`
+- `include/output/f1_all_full.parquet`
 
 ### `f1_download_gp`
 Descarga y procesa un único Gran Premio.
@@ -77,7 +77,7 @@ f1-pipeline/
 │   └── output/          # Datos generados (no se versiona)
 │       ├── bronze/      # JSON crudo (ergast/ y fastf1/)
 │       ├── silver/_parciales/  # Parquets por GP (temporales, se borran)
-│       └── f1_all_full.csv     # output final
+│       └── f1_all_full.parquet # output final
 ├── notebooks/
 │   └── explorar_parquet_f1.ipynb
 ├── docker-compose.yml
