@@ -1,6 +1,6 @@
 # F1 Data Pipeline
 
-Pipeline de datos para Formula 1 usando Apache Airflow. Descarga datos históricos de carreras (2000-2026) desde repositorios públicos de GitHub (TracingInsights), los procesa en capas tipo medallón (bronze → silver) y genera datasets consolidados en formato Parquet.
+Pipeline de datos para Formula 1 usando Apache Airflow. Descarga datos históricos de carreras (2018-2026) desde repositorios públicos de GitHub (TracingInsights), los procesa en capas tipo medallón (bronze → silver) y genera un dataset consolidado en CSV.
 
 ## Requisitos
 
@@ -45,16 +45,12 @@ Esperar a que los servicios estén healthy (unos 30 segundos).
 Descarga y procesa un rango de temporadas.
 
 **Parámetros:**
-- `year_start` (int): primera temporada (default: 2000)
+- `year_start` (int): primera temporada (default: 2018)
 - `year_end` (int): última temporada (default: 2026)
-- `mode` (str): `"results_only"` | `"full"` (default: `"full"`)
-  - `results_only`: solo resultados de carrera + clasificación + standings
-  - `full`: lo anterior + datos de prácticas (FP1/FP2/FP3) con telemetría para SOFT, MEDIUM, HARD, INTERMEDIATE, WET (2018+)
 - `force` (bool): reprocesar todo, incluso si ya está completo (default: `false`)
 
 **Outputs:**
-- `include/output/f1_all_results.csv` — siempre
-- `include/output/f1_all_full.csv` — solo si `mode="full"`
+- `include/output/f1_all_full.csv`
 
 ### `f1_download_gp`
 Descarga y procesa un único Gran Premio.
@@ -62,7 +58,6 @@ Descarga y procesa un único Gran Premio.
 **Parámetros:**
 - `year` (int): temporada
 - `round` (int): número de ronda del GP (según calendario)
-- `mode` (str): `"results_only"` | `"full"` (default: `"full"`)
 
 ## Estructura
 
@@ -82,8 +77,7 @@ f1-pipeline/
 │   └── output/          # Datos generados (no se versiona)
 │       ├── bronze/      # JSON crudo (ergast/ y fastf1/)
 │       ├── silver/_parciales/  # Parquets por GP (temporales, se borran)
-│       ├── f1_all_results.csv       # output final (siempre)
-│       └── f1_all_full.csv          # output final (si mode="full")
+│       └── f1_all_full.csv     # output final
 ├── notebooks/
 │   └── explorar_parquet_f1.ipynb
 ├── docker-compose.yml
@@ -94,11 +88,12 @@ f1-pipeline/
 
 ## Notas
 
-- Los datos de prácticas (FastF1) solo están disponibles desde **2018** en adelante.
+- Los datos de prácticas (FastF1) solo están disponibles desde **2018** en adelante; el pipeline cubre 2018-2026.
 - GPs futuros (sin `results.json`) se saltan automáticamente.
 - Se descargan todas las vueltas MEDIUM + la vuelta más rápida absoluta (cualquier compuesto: SOFT, MEDIUM, HARD, INTERMEDIATE, WET).
 - En el dataset: `LapTime_min_*` existe para todos los compuestos; `LapTime_mean_*` solo para SOFT y MEDIUM (que tienen múltiples vueltas).
 - Telemetría (`Throttle_mean_*`, `Speed_mean_*`, etc.) se calcula solo para MEDIUM.
+- Las columnas `FP_*` (prácticas) se unifican entre FP1/FP2/FP3. El diccionario de columnas completo (convención `_ABS`/`_DBT_%`) está en `include/output/columnas.md`.
 
 ## Limpiar y regenerar todo
 

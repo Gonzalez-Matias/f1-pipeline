@@ -5,14 +5,12 @@ Descarga todos los GPs de un rango de temporadas, validando primero
 si ya estan completos en el consolidado historico.
 
 **Parametros:**
-- `year_start` (int): primera temporada (default 2000)
+- `year_start` (int): primera temporada (default 2018)
 - `year_end`   (int): ultima temporada  (default 2026)
-- `mode`       (str): "results_only" | "full" (default "full")
 - `force`      (bool): re-descargar aunque este completo
 
 **Salida:**
-- `silver/f1_all_results.csv`
-- `silver/f1_all_full.csv` (si mode="full")
+- `silver/f1_all_full.csv`
 """
 from __future__ import annotations
 
@@ -47,9 +45,8 @@ default_args = {
     max_active_tasks=8,
     tags=["f1", "bronze", "silver"],
     params={
-        "year_start": Param(2000, type="integer", description="Primer año (inclusive)"),
+        "year_start": Param(2018, type="integer", description="Primer año (inclusive)"),
         "year_end":   Param(2026, type="integer", description="Ultimo año (inclusive)"),
-        "mode":       Param("full", type="string", enum=["results_only", "full"]),
         "force":      Param(False, type="boolean", description="Re-descargar aunque este completo"),
     },
 )
@@ -60,12 +57,11 @@ def f1_download_year():
         """Devuelve lista plana de todos los GPs a descargar en el rango."""
         year_start = context["params"]["year_start"]
         year_end   = context["params"]["year_end"]
-        mode       = context["params"]["mode"]
         force      = context["params"]["force"]
 
         all_gps = []
         for year in range(year_start, year_end + 1):
-            check = should_download(year, mode, force)
+            check = should_download(year, force)
             if not check["should_download"]:
                 continue
 
@@ -81,7 +77,6 @@ def f1_download_year():
                     "year": year,
                     "round": gp["round"],
                     "race_name": gp["race_name"],
-                    "mode": mode,
                 })
 
         log.info("Rango %s-%s: %s GPs a descargar", year_start, year_end, len(all_gps))
@@ -92,33 +87,29 @@ def f1_download_year():
         year = gp_info["year"]
         round_num = gp_info["round"]
         race_name = gp_info["race_name"]
-        mode = gp_info["mode"]
         force = context["params"]["force"]
 
-        log.info("[Download] %s/%s %s (force=%s, mode=%s)", year, round_num, race_name, force, mode)
-        result = process_single_gp(year, round_num, race_name, force=force, mode=mode)
+        log.info("[Download] %s/%s %s (force=%s)", year, round_num, race_name, force)
+        result = process_single_gp(year, round_num, race_name, force=force)
         return {
             "year": year,
             "slug": result["slug"],
-            "mode": mode,
         }
 
     @task
     def build(gp_info: dict, **context) -> dict:
         year = gp_info["year"]
         slug = gp_info["slug"]
-        mode = gp_info["mode"]
 
         log.info("[Silver] %s/%s", year, slug)
-        build_gp_silver(year, slug, mode=mode)
-        return {"mode": mode}
+        build_gp_silver(year, slug)
+        return {"year": year, "slug": slug}
 
     @task(trigger_rule="none_failed_min_one_success")
     def consolidate(gp_results: list[dict], **context) -> dict:
-        mode = context["params"]["mode"]
-        log.info("Consolidando historico (mode=%s)", mode)
-        paths = consolidate_all(mode=mode, cleanup=True)
-        return {"mode": mode, "paths": paths}
+        log.info("Consolidando historico")
+        paths = consolidate_all(cleanup=True)
+        return {"paths": paths}
 
     # Flujo
     gps = discover_range()

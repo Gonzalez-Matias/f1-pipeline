@@ -1,22 +1,17 @@
 """
 Construye la capa Plata a partir de la capa Bronce.
 
-Soporta dos modos:
-  - results_only: solo columnas Archive (Ergast)
-  - full: Archive + FastF1 (telemetria de practicas)
-
 Para cada GP genera (parciales, formato interno en parquet):
-  - {gp_slug}_results.parquet  (siempre)
-  - {gp_slug}_full.parquet     (solo si mode='full')
+  - {gp_slug}_full.parquet
 
-Consolidados (formato final en CSV):
-  - f1_all_results.csv     (siempre)
-  - f1_all_full.csv        (solo si mode='full')
+Consolidado (formato final en CSV):
+  - f1_all_full.csv
 """
 from __future__ import annotations
 
 import json
 import logging
+import shutil
 from collections import defaultdict
 from pathlib import Path
 
@@ -75,27 +70,38 @@ def parse_archive_gp(year: int, gp_slug: str) -> pd.DataFrame:
     if not df_team_pts.empty:
         df = df.merge(df_team_pts, on="TeamId", how="left")
 
-    # En la primera carrera no existe standings anterior.
-    for column in ("DriverPoints_Before", "DriverWins_Before", "TeamPoints_Before", "TeamWins_Before"):
-        if column in df.columns:
-            df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0)
-
-    # Mantener el mismo esquema incluso en la primera carrera, donde no hay
-    # standings previos.
+    # Standings previos: en la primera carrera no existen; se completan a 0.
     for column in (
-        "DriverPosition_Before", "DriverPoints_Before", "DriverWins_Before",
-        "TeamPosition_Before", "TeamPoints_Before", "TeamWins_Before",
-    ):
-        if column not in df.columns:
-            df[column] = 0
-
-    for column in (
-        "GridPosition", "QualyPosition", "Race_Position",
-        "Race_Points", "Race_Laps", "DriverPosition_Before",
-        "TeamPosition_Before",
+        "DriverPosition_Before", "DriverPoints_Before",
+        "TeamPosition_Before", "TeamPoints_Before",
     ):
         if column in df.columns:
             df[column] = pd.to_numeric(df[column], errors="coerce")
+        else:
+            df[column] = 0
+
+    # Puntos: completar NaN con 0.
+    for column in ("DriverPoints_Before", "TeamPoints_Before"):
+        df[column] = df[column].fillna(0)
+
+    # Posiciones de grilla, qualy y carrera.
+    for column in ("Q_GridPosition", "Q_Position", "RACE_Position"):
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+
+    # Qualy: convertir Q1/Q2/Q3 a segundos y calcular el mejor tiempo.
+    for col in ("Q1", "Q2", "Q3"):
+        if col in df.columns:
+            df[f"{col}_seconds"] = df[col].apply(_time_to_seconds)
+
+    qualy_seconds_cols = [
+        c for c in ("Q1_seconds", "Q2_seconds", "Q3_seconds")
+        if c in df.columns
+    ]
+    if qualy_seconds_cols:
+        df["Q_Best_seconds"] = df[qualy_seconds_cols].min(axis=1)
+
+    df = df.drop(columns=[c for c in ("Q1", "Q2", "Q3") if c in df.columns])
 
     # Agregar metadata del GP
     df["Year"] = year
@@ -123,12 +129,11 @@ def _parse_results(path: Path) -> pd.DataFrame:
             "DriverNumber": r.get("number"),
             "DriverId": r.get("Driver", {}).get("driverId"),
             "TeamId": r.get("Constructor", {}).get("constructorId"),
-            "Race_Position": r.get("position"),
-            "Race_ClassifiedPosition": r.get("positionText"),
-            "Race_Status": r.get("status"),
-            "Race_Points": r.get("points"),
-            "Race_Laps": r.get("laps"),
-            "GridPosition": r.get("grid"),
+            "RACE_Position": r.get("position"),
+            # Transitoria: se usa para calcular la tasa de carreras finalizadas
+            # y se descarta en el consolidado.
+            "RACE_ClassifiedPosition": r.get("positionText"),
+            "Q_GridPosition": r.get("grid"),
         })
 
     return pd.DataFrame(rows)
@@ -151,13 +156,29 @@ def _parse_quali(path: Path) -> pd.DataFrame:
     for q in quali:
         rows.append({
             "DriverNumber": q.get("number"),
-            "QualyPosition": q.get("position"),
-            "QualyQ1": q.get("Q1"),
-            "QualyQ2": q.get("Q2"),
-            "QualyQ3": q.get("Q3"),
+            "Q_Position": q.get("position"),
+            "Q1": q.get("Q1"),
+            "Q2": q.get("Q2"),
+            "Q3": q.get("Q3"),
         })
 
     return pd.DataFrame(rows)
+
+
+def _time_to_seconds(value) -> float | None:
+    """Convierte un tiempo 'mm:ss.mmm' (o None/vacío) a segundos."""
+    if value is None or pd.isna(value):
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        if ":" in s:
+            minutes, seconds = s.split(":")
+            return float(minutes) * 60 + float(seconds)
+        return float(s)
+    except (ValueError, TypeError):
+        return None
 
 
 def _parse_driver_points(path: Path) -> pd.DataFrame:
@@ -179,7 +200,6 @@ def _parse_driver_points(path: Path) -> pd.DataFrame:
             "DriverId": d.get("Driver", {}).get("driverId"),
             "DriverPosition_Before": d.get("position"),
             "DriverPoints_Before": d.get("points"),
-            "DriverWins_Before": d.get("wins"),
         })
 
     return pd.DataFrame(rows)
@@ -204,7 +224,6 @@ def _parse_team_points(path: Path) -> pd.DataFrame:
             "TeamId": c.get("Constructor", {}).get("constructorId"),
             "TeamPosition_Before": c.get("position"),
             "TeamPoints_Before": c.get("points"),
-            "TeamWins_Before": c.get("wins"),
         })
 
     return pd.DataFrame(rows)
@@ -246,36 +265,84 @@ def _get_previous_gp_slug(year: int, gp_slug: str) -> str | None:
 
 
 def parse_fastf1_gp(year: int, gp_slug: str) -> pd.DataFrame:
-    """Parsea datos de practicas FastF1 y devuelve DataFrame con features."""
-    if year < 2018:
-        return pd.DataFrame()
+    """Parsea datos de practicas FastF1 y devuelve features unificados.
 
+    Recolecta las vueltas validas de las 3 sesiones (FP1/FP2/FP3) por piloto
+    y genera una unica fila por piloto con columnas prefijadas 'FP_' (sin
+    division por sesion).
+    """
     base_dir = BRONZE_FASTF1 / str(year) / gp_slug
     if not base_dir.exists():
         return pd.DataFrame()
 
-    all_features = []
+    # by_driver[abbr] = [(session_dir, lap_dict), ...]
+    by_driver = defaultdict(list)
+    driver_mapping: dict[str, str] = {}
+
     for session in FASTF1_SESSIONS:
         session_dir = base_dir / session
-        if not session_dir.exists():
-            continue
-
         laptimes_path = session_dir / "session_laptimes.json"
-        if not laptimes_path.exists():
+        if not session_dir.exists() or not laptimes_path.exists():
             continue
 
-        df_session = _parse_practice_session(laptimes_path, session)
-        if not df_session.empty:
-            all_features.append(df_session)
+        driver_mapping.update(_load_driver_mapping(session_dir))
 
-    if not all_features:
-        return pd.DataFrame()
+        with open(laptimes_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
-    df_final = all_features[0]
-    for df in all_features[1:]:
-        df_final = df_final.merge(df, on="DriverNumber", how="outer")
+        laps = filter_outliers(valid_laps(data))
+        for lap in laps:
+            by_driver[lap["driver"]].append((session_dir, lap))
 
-    return df_final
+    features = []
+    for driver_abbr, entries in by_driver.items():
+        driver_num = driver_mapping.get(driver_abbr, driver_abbr)
+        row = {"DriverNumber": driver_num}
+        laps = [lap for _, lap in entries]
+
+        # Tiempos por compuesto (unificados entre las 3 sesiones)
+        compound_labels = {"MEDIUM": "MED", "INTERMEDIATE": "INTER"}
+        unique_compounds = {l["compound"] for l in laps}
+        for compound in unique_compounds:
+            times = [l["time"] for l in laps if l["compound"] == compound]
+            label = compound_labels.get(compound, compound)
+            row[f"FP_LapTime_min_{label}"] = min(times)
+            if compound in ("SOFT", "MEDIUM"):
+                row[f"FP_LapTime_mean_{label}"] = sum(times) / len(times)
+
+        # Telemetria de la unica vuelta mas rapida del fin de semana
+        best_session_dir, best_lap = min(entries, key=lambda e: e[1]["time"])
+        tel_abs = _read_telemetry(str(best_session_dir), driver_abbr, best_lap["lap"])
+        if tel_abs:
+            row["FP_Throttle_fastlap"] = tel_abs["throttle"]
+            row["FP_Speed_fastlap"] = tel_abs["speed"]
+            row["FP_Speed_max"] = tel_abs["speed_max"]
+            row["FP_RPM_fastlap"] = tel_abs["rpm"]
+            row["FP_Brake_fastlap"] = tel_abs["brake"]
+
+        # Telemetria media de todas las vueltas MEDIUM del fin de semana
+        medium_entries = [e for e in entries if e[1]["compound"] == "MEDIUM"]
+        if medium_entries:
+            tel_values = {"throttle": [], "speed": [], "rpm": [], "brake": []}
+            for session_dir, lap in medium_entries:
+                tel = _read_telemetry(str(session_dir), driver_abbr, lap["lap"])
+                if tel:
+                    for k in tel_values:
+                        if tel[k] is not None:
+                            tel_values[k].append(tel[k])
+
+            if tel_values["throttle"]:
+                row["FP_Throttle_mean_MED"] = sum(tel_values["throttle"]) / len(tel_values["throttle"])
+            if tel_values["speed"]:
+                row["FP_Speed_mean_MED"] = sum(tel_values["speed"]) / len(tel_values["speed"])
+            if tel_values["rpm"]:
+                row["FP_RPM_mean_MED"] = sum(tel_values["rpm"]) / len(tel_values["rpm"])
+            if tel_values["brake"]:
+                row["FP_Brake_mean_MED"] = sum(tel_values["brake"]) / len(tel_values["brake"])
+
+        features.append(row)
+
+    return pd.DataFrame(features)
 
 
 def _load_driver_mapping(session_dir: Path) -> dict[str, str]:
@@ -296,77 +363,6 @@ def _load_driver_mapping(session_dir: Path) -> dict[str, str]:
         return mapping
     except Exception:
         return {}
-
-
-def _parse_practice_session(
-    laptimes_path: Path, session_name: str
-) -> pd.DataFrame:
-    """Parsea una sesion de practica y calcula features."""
-    session_dir = laptimes_path.parent
-    driver_mapping = _load_driver_mapping(session_dir)
-
-    with open(laptimes_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    laps = valid_laps(data)
-    if not laps:
-        return pd.DataFrame()
-
-    filtered = filter_outliers(laps)
-    if not filtered:
-        return pd.DataFrame()
-
-    session_prefix = session_name.replace("Practice ", "FP")
-    features = []
-
-    by_driver = defaultdict(list)
-    for l in filtered:
-        by_driver[l["driver"]].append(l)
-
-    for driver_abbr, driver_laps in by_driver.items():
-        driver_num = driver_mapping.get(driver_abbr, driver_abbr)
-        row = {"DriverNumber": driver_num}
-
-        # Tiempos por compuesto (solo los que existen en los datos)
-        unique_compounds = set(l["compound"] for l in driver_laps)
-        for compound in unique_compounds:
-            compound_laps = [l for l in driver_laps if l["compound"] == compound]
-            if compound_laps:
-                times = [l["time"] for l in compound_laps]
-                row[f"{session_prefix}_LapTime_min_{compound}"] = min(times)
-                if compound in ("SOFT", "MEDIUM"):
-                    row[f"{session_prefix}_LapTime_mean_{compound}"] = sum(times) / len(times)
-
-        abs_lap = min(driver_laps, key=lambda x: x["time"])
-        tel_abs = _read_telemetry(str(session_dir), driver_abbr, abs_lap["lap"])
-        if tel_abs:
-            row[f"{session_prefix}_Throttle_abs"] = tel_abs["throttle"]
-            row[f"{session_prefix}_Speed_abs"] = tel_abs["speed"]
-            row[f"{session_prefix}_RPM_abs"] = tel_abs["rpm"]
-            row[f"{session_prefix}_Brake_abs"] = tel_abs["brake"]
-
-        medium_laps = [l for l in driver_laps if l["compound"] == "MEDIUM"]
-        if medium_laps:
-            tel_values = {"throttle": [], "speed": [], "rpm": [], "brake": []}
-            for l in medium_laps:
-                tel = _read_telemetry(str(session_dir), driver_abbr, l["lap"])
-                if tel:
-                    for k in tel_values:
-                        if tel[k] is not None:
-                            tel_values[k].append(tel[k])
-
-            if tel_values["throttle"]:
-                row[f"{session_prefix}_Throttle_mean_MEDIUM"] = sum(tel_values["throttle"]) / len(tel_values["throttle"])
-            if tel_values["speed"]:
-                row[f"{session_prefix}_Speed_mean_MEDIUM"] = sum(tel_values["speed"]) / len(tel_values["speed"])
-            if tel_values["rpm"]:
-                row[f"{session_prefix}_RPM_mean_MEDIUM"] = sum(tel_values["rpm"]) / len(tel_values["rpm"])
-            if tel_values["brake"]:
-                row[f"{session_prefix}_Brake_mean_MEDIUM"] = sum(tel_values["brake"]) / len(tel_values["brake"])
-
-        features.append(row)
-
-    return pd.DataFrame(features)
 
 
 def _read_telemetry(session_dir: str, driver: str, lap_num: int) -> dict | None:
@@ -394,6 +390,7 @@ def _read_telemetry(session_dir: str, driver: str, lap_num: int) -> dict | None:
         return {
             "throttle": sum(throttle_valid) / len(throttle_valid) if throttle_valid else None,
             "speed": sum(speed) / len(speed) if speed else None,
+            "speed_max": max(speed) if speed else None,
             "rpm": sum(rpm) / len(rpm) if rpm else None,
             # brake viene en [0, 1]; se escala a porcentaje.
             "brake": sum(brake) / len(brake) * 100 if brake else None,
@@ -406,18 +403,30 @@ def _read_telemetry(session_dir: str, driver: str, lap_num: int) -> dict | None:
 
 
 def _reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Reordena columnas en orden logico."""
+    """Reordena columnas en orden logico.
+
+    Identificacion -> Standings -> FP ABS -> FP DBT -> Q ABS -> Q DBT -> RACE.
+    """
     id_cols = ["DriverId", "DriverNumber", "TeamId", "Year", "RoundNumber"]
-    qualy_cols = [c for c in df.columns if c.startswith("Qualy")]
-    standings_cols = [c for c in df.columns if c.endswith("_Before")]
-    fp_cols = [c for c in df.columns if c.startswith(("FP1_", "FP2_", "FP3_"))]
-    race_cols = [c for c in df.columns if c.startswith("Race_")]
+    standings_cols = [
+        "DriverPosition_Before", "DriverPoints_Before",
+        "DriverPoints_Before_DBT_%", "TeamPosition_Before", "TeamPoints_Before",
+    ]
+    q_pos_cols = ["Q_Position", "Q_GridPosition"]
+    fp_abs_cols = [c for c in df.columns if c.startswith("FP_") and c.endswith("_ABS")]
+    fp_dbt_cols = [c for c in df.columns if c.startswith("FP_") and c.endswith("_DBT_%")]
+    q_abs_cols = [c for c in df.columns if c.startswith("Q") and c.endswith("_ABS")]
+    q_dbt_cols = [c for c in df.columns if c.startswith("Q") and c.endswith("_DBT_%")]
+    race_cols = [c for c in df.columns if c.startswith("RACE")]
 
     ordered = (
         [c for c in id_cols if c in df.columns]
-        + qualy_cols
-        + standings_cols
-        + fp_cols
+        + [c for c in standings_cols if c in df.columns]
+        + fp_abs_cols
+        + fp_dbt_cols
+        + [c for c in q_pos_cols if c in df.columns]
+        + q_abs_cols
+        + q_dbt_cols
         + race_cols
     )
     remaining = [c for c in df.columns if c not in ordered]
@@ -425,45 +434,73 @@ def _reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df[[c for c in final_cols if c in df.columns]]
 
 
-def build_gp_silver(year: int, gp_slug: str, mode: str = "full") -> dict[str, str]:
+def _add_abs_dbt(df: pd.DataFrame) -> pd.DataFrame:
+    """Agrega los sufijos _ABS (valor absoluto) y _DBT_% (distancia porcentual
+    al mejor de la carrera) a cada columna numerica por-carrera.
+
+    DBT_% = (valor - minimo de la carrera) / minimo * 100. Las columnas FP_* y
+    de qualy se renombran a _ABS y agregan su _DBT_%; DriverPoints_Before
+    mantiene su nombre y solo agrega su _DBT_% (medido respecto al maximo,
+    el lider del campeonato).
+    """
+    rename_cols = [c for c in df.columns if c.startswith("FP_")]
+    rename_cols += [
+        c for c in ("Q1_seconds", "Q2_seconds", "Q3_seconds", "Q_Best_seconds")
+        if c in df.columns
+    ]
+
+    rename = {}
+    for col in rename_cols:
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            continue
+        best = df[col].min()
+        df[f"{col}_DBT_%"] = (df[col] - best) / best * 100 if best > 0 else pd.NA
+        rename[col] = f"{col}_ABS"
+
+    if rename:
+        df = df.rename(columns=rename)
+
+    if "DriverPoints_Before" in df.columns:
+        best = df["DriverPoints_Before"].max()
+        if best > 0:
+            df["DriverPoints_Before_DBT_%"] = (
+                (best - df["DriverPoints_Before"]) / best * 100
+            )
+        else:
+            df["DriverPoints_Before_DBT_%"] = pd.NA
+
+    return df
+
+
+def build_gp_silver(year: int, gp_slug: str) -> dict[str, str]:
     """
     Construye el DataFrame de plata para un GP.
-    
-    Args:
-        mode: 'results_only' o 'full'
-        
+
     Returns:
         Dict con rutas de los archivos generados.
     """
-    log.info("Construyendo Plata para %s/%s (mode=%s)", year, gp_slug, mode)
-    
-    result_paths = {}
+    log.info("Construyendo Plata para %s/%s", year, gp_slug)
 
-    # 1. Datos de Archive (siempre)
+    # 1. Datos de Archive (resultados, quali y standings)
     df_archive = parse_archive_gp(year, gp_slug)
     if df_archive.empty:
         log.warning("No hay datos de Archive para %s/%s", year, gp_slug)
-        return result_paths
+        return {}
 
-    # Guardar _results (siempre)
-    df_results = _reorder_columns(df_archive)
-    results_path = _save_gp_silver(year, gp_slug, df_results, suffix="results")
-    result_paths["results"] = results_path
+    # 2. Datos de FastF1 (telemetria de practicas)
+    df_fastf1 = parse_fastf1_gp(year, gp_slug)
+    if not df_fastf1.empty:
+        df_full = df_archive.merge(df_fastf1, on="DriverNumber", how="left")
+    else:
+        # Si no hay FastF1 (pre-2018 o sin datos), usar archive como full
+        # para mantener consistencia de filas en el consolidado
+        df_full = df_archive.copy()
 
-    # 2. Datos de FastF1 (solo si mode='full')
-    if mode == "full":
-        df_fastf1 = parse_fastf1_gp(year, gp_slug)
-        if not df_fastf1.empty:
-            df_full = df_archive.merge(df_fastf1, on="DriverNumber", how="left")
-        else:
-            # Si no hay FastF1 (pre-2018 o sin datos), usar archive como full
-            # para mantener consistencia de filas en el consolidado
-            df_full = df_archive.copy()
-        df_full = _reorder_columns(df_full)
-        full_path = _save_gp_silver(year, gp_slug, df_full, suffix="full")
-        result_paths["full"] = full_path
+    df_full = _add_abs_dbt(df_full)
+    df_full = _reorder_columns(df_full)
+    full_path = _save_gp_silver(year, gp_slug, df_full, suffix="full")
 
-    return result_paths
+    return {"full": full_path}
 
 
 def _save_gp_silver(year: int, gp_slug: str, df: pd.DataFrame, suffix: str) -> str:
@@ -512,9 +549,45 @@ def _upsert_table(existing_path: Path, new_df: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([kept, new_df], ignore_index=True)
 
 
-def consolidate_all(mode: str = "full", cleanup: bool = True) -> dict[str, str]:
+def _add_pre_race_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Agrega features acumuladas por temporada (pre-carrera, sin la actual).
+
+    - Races_Before: carreras previas del piloto en la temporada.
+    - FinishRate_Before: finalizadas previas / Races_Before.
+    - DriverPoints_Rate_Before: DriverPoints_Before / (Races_Before * 25).
+    - Avg_Position_Gain_Before: media de (Q_GridPosition - RACE_Position) en
+      las carreras previas de la temporada.
+    Luego descarta la columna transitoria RACE_ClassifiedPosition.
     """
-    Une TODOS los GPs de TODOS los anos en uno o dos CSV consolidados.
+    if "RACE_ClassifiedPosition" not in df.columns:
+        return df
+
+    df = df.copy()
+    df["_finished"] = pd.to_numeric(df["RACE_ClassifiedPosition"], errors="coerce").notna()
+
+    df = df.sort_values(["DriverId", "Year", "RoundNumber"]).reset_index(drop=True)
+
+    grp = df.groupby(["DriverId", "Year"], sort=False)
+    df["Races_Before"] = grp.cumcount()
+    finished_cum = grp["_finished"].cumsum()
+    df["FinishRate_Before"] = (finished_cum - df["_finished"]) / df["Races_Before"]
+
+    # Tasa de dominancia: puntos del campeonato normalizados por el máximo
+    # teórico (carreras previas * 25 pts por victoria). NaN sin carreras previas.
+    denom = (df["Races_Before"] * 25).where(df["Races_Before"] != 0)
+    df["DriverPoints_Rate_Before"] = df["DriverPoints_Before"] / denom
+
+    # Ganancia media de posiciones (grid - carrera) en carreras previas.
+    gain = df["Q_GridPosition"] - df["RACE_Position"]
+    gain_cum = grp["Q_GridPosition"].cumsum() - grp["RACE_Position"].cumsum()
+    df["Avg_Position_Gain_Before"] = (gain_cum - gain) / df["Races_Before"]
+
+    return df.drop(columns=["_finished", "RACE_ClassifiedPosition"])
+
+
+def consolidate_all(cleanup: bool = True) -> dict[str, str]:
+    """
+    Une TODOS los GPs de TODOS los anos en un CSV consolidado.
     Lee de silver/_parciales/ (parquet, formato interno temporal), escribe
     en output/ como CSV, y limpia parciales.
 
@@ -526,42 +599,25 @@ def consolidate_all(mode: str = "full", cleanup: bool = True) -> dict[str, str]:
     """
     result_paths = {}
 
-    # Consolidar _results (siempre)
-    all_result_files = sorted(PARTIALS_DIR.glob("*/*_results.parquet"))
-    if all_result_files:
+    # Consolidar _full (unico output)
+    all_full_files = sorted(PARTIALS_DIR.glob("*/*_full.parquet"))
+    if all_full_files:
         new_df = pd.concat(
-            [pd.read_parquet(f) for f in all_result_files], ignore_index=True
+            [pd.read_parquet(f) for f in all_full_files], ignore_index=True
         )
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        dest = OUTPUT_DIR / "f1_all_results.csv"
+        dest = OUTPUT_DIR / "f1_all_full.csv"
         df = _upsert_table(dest, new_df)
+        df = _add_pre_race_features(df)
         df.to_csv(dest, index=False, sep=';')
-        log.info("Consolidado all results: %s GPs nuevos, %s filas x %s columnas -> %s",
-                 len(all_result_files), len(df), len(df.columns), dest)
-        result_paths["results"] = str(dest)
+        log.info("Consolidado all full: %s GPs nuevos, %s filas x %s columnas -> %s",
+                 len(all_full_files), len(df), len(df.columns), dest)
+        result_paths["full"] = str(dest)
     else:
-        log.warning("No hay archivos _results para consolidar")
-
-    # Consolidar _full (solo si mode='full')
-    if mode == "full":
-        all_full_files = sorted(PARTIALS_DIR.glob("*/*_full.parquet"))
-        if all_full_files:
-            new_df = pd.concat(
-                [pd.read_parquet(f) for f in all_full_files], ignore_index=True
-            )
-            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            dest = OUTPUT_DIR / "f1_all_full.csv"
-            df = _upsert_table(dest, new_df)
-            df.to_csv(dest, index=False, sep=';')
-            log.info("Consolidado all full: %s GPs nuevos, %s filas x %s columnas -> %s",
-                     len(all_full_files), len(df), len(df.columns), dest)
-            result_paths["full"] = str(dest)
-        else:
-            log.info("No hay archivos _full para consolidar")
+        log.info("No hay archivos _full para consolidar")
 
     # Limpiar parciales
     if cleanup and PARTIALS_DIR.exists():
-        import shutil
         shutil.rmtree(PARTIALS_DIR)
         log.info("Parciales limpiados: %s", PARTIALS_DIR)
 
