@@ -11,8 +11,12 @@ plugins/
 # Datos generados (se recrean con el pipeline)
 include/output/
 
-# Notebooks checkpoints
+# Notebooks
+*.ipynb
 .ipynb_checkpoints/
+
+# Configuración de opencode (no se versiona)
+.opencode/
 
 # Environment
 .env

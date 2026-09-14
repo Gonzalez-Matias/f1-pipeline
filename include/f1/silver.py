@@ -307,7 +307,7 @@ def parse_fastf1_gp(year: int, gp_slug: str) -> pd.DataFrame:
             times = [l["time"] for l in laps if l["compound"] == compound]
             label = compound_labels.get(compound, compound)
             row[f"FP_LapTime_min_{label}"] = min(times)
-            if compound in ("SOFT", "MEDIUM"):
+            if compound in ("SOFT", "MEDIUM", "HARD"):
                 row[f"FP_LapTime_mean_{label}"] = sum(times) / len(times)
 
         # Telemetria de la unica vuelta mas rapida del fin de semana
