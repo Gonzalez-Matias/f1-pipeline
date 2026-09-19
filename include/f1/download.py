@@ -6,8 +6,8 @@ telemetria selectiva necesaria para Plata: la vuelta mas rapida por piloto y
 todas las vueltas MEDIUM que pasan los filtros.
 
 Fuentes:
-  - TracingInsights-Archive/Stats : 2000-2026, JSON estilo Ergast
-  - TracingInsights/{year}        : 2018-2026, sesiones y telemetria FastF1
+  - TracingInsights-Archive/Stats : resultados, quali y standings (Ergast)
+  - TracingInsights/{year}        : 2018+, telemetria de practicas FastF1
 """
 from __future__ import annotations
 
@@ -246,8 +246,18 @@ def download_gp_fastf1(year: int, race_name: str, force: bool = False) -> dict:
         laptimes_path = session_dir / "session_laptimes.json"
         vueltas_abs, vueltas_medium = filter_session_laps(laptimes_path)
 
+        # Deduplicar por (driver, lap): la vuelta más rápida puede ser MEDIUM.
         laps_to_download = list(vueltas_abs.values())
         laps_to_download.extend(vueltas_medium)
+        seen = set()
+        unique = []
+        for lap in laps_to_download:
+            key = (lap["driver"], lap["lap"])
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(lap)
+        laps_to_download = unique
 
         if laps_to_download:
             tel_res = download_telemetry_laps(
@@ -270,22 +280,13 @@ def download_gp_fastf1(year: int, race_name: str, force: bool = False) -> dict:
 # --------------------------------------------------------------------- manifest
 
 
-def write_manifest(
-    dest_dir: Path,
-    year: int,
-    round_num: int,
-    gp_slug: str,
-    archive_res: dict,
-    fastf1_res: dict,
-) -> None:
-    """Escribe manifest.json con metadata y resumen de descarga del GP."""
+def write_manifest(dest_dir: Path, year: int, round_num: int, gp_slug: str) -> None:
+    """Escribe manifest.json con la metadata minima del GP."""
     manifest = {
         "year": year,
         "round": round_num,
         "gp_slug": gp_slug,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "archive": archive_res,
-        "fastf1": fastf1_res,
     }
     manifest_path = dest_dir / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:
@@ -296,20 +297,20 @@ def write_manifest(
 
 
 def process_single_gp(
-    year: int, round_num: int, race_name: str, force: bool = False, mode: str = "full"
+    year: int, round_num: int, race_name: str, force: bool = False
 ) -> dict:
     """Procesa UN GP completo. Funcion pura, lista para convertir en @task."""
     slug = slugify(race_name)
-    log.info("GP %s (%s) - %s (mode=%s)", round_num, slug, race_name, mode)
+    log.info("GP %s (%s) - %s", round_num, slug, race_name)
 
-    # Archive (todos los anos)
+    # Archive (resultados, quali y standings)
     archive_res = download_gp_archive(year, race_name, force=force)
     log.info("  Archive: %s descargados, %s faltantes", archive_res["downloaded"], archive_res["missing"])
 
-    # FastF1 metadata + telemetry (2018+). Solo si mode='full':
-    # results_only no necesita telemetria ni datos de practicas.
+    # FastF1 metadata + telemetria de practicas (2018+)
+    use_fastf1 = year >= 2018
     fastf1_res = {"sessions": 0, "files_downloaded": 0, "files_missing": 0, "tel_downloaded": 0, "tel_skipped": 0, "tel_missing": 0}
-    if mode == "full" and year >= 2018:
+    if use_fastf1:
         fastf1_res = download_gp_fastf1(year, race_name, force=force)
         log.info(
             "  FastF1: %s sesiones, %s metadata descargados (%s faltantes), %s tel descargados (%s skip, %s miss)",
@@ -322,8 +323,7 @@ def process_single_gp(
         )
 
     # Manifest
-    use_fastf1 = mode == "full" and year >= 2018
     dest_dir = BRONZE_FASTF1 / str(year) / slug if use_fastf1 else BRONZE_ERGAST / str(year) / slug
-    write_manifest(dest_dir, year, round_num, slug, archive_res, fastf1_res)
+    write_manifest(dest_dir, year, round_num, slug)
 
     return {"slug": slug}

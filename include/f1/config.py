@@ -3,11 +3,10 @@ Configuracion central del pipeline F1.
 
 Estructura tipo medallon (patron FIFA):
   include/output/
-    bronze/ergast/     ← JSON crudo Archive (persistente, append-only)
+    bronze/ergast/     ← JSON crudo Archive (resultados, quali, standings)
     bronze/fastf1/     ← metadata + tel FastF1 (persistente, append-only)
     silver/_parciales/ ← parquets por GP (temporales, se borran tras consolidar)
-    f1_all_results.csv  ← output final
-    f1_all_full.csv     ← output final (si mode=full)
+    f1_all_full.parquet  ← output final
 """
 from pathlib import Path
 import os

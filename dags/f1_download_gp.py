@@ -6,7 +6,6 @@ Descarga un Gran Premio específico y reconstruye los consolidados.
 **Parametros:**
 - `year` (int)
 - `round` (int)
-- `mode` (str): `"results_only"` | `"full"`
 """
 from __future__ import annotations
 
@@ -41,7 +40,6 @@ default_args = {
     params={
         "year": Param(2024, type="integer"),
         "round": Param(1, type="integer"),
-        "mode": Param("full", type="string", enum=["results_only", "full"]),
     },
 )
 def f1_download_gp():
@@ -50,7 +48,6 @@ def f1_download_gp():
     def download(**context) -> dict:
         year = context["params"]["year"]
         round_num = context["params"]["round"]
-        mode = context["params"]["mode"]
 
         schedule = get_schedule(year)
         race_name = None
@@ -61,30 +58,27 @@ def f1_download_gp():
         if not race_name:
             raise ValueError(f"GP {round_num} no encontrado en calendario {year}")
 
-        log.info("[Download] %s/%s %s (mode=%s)", year, round_num, race_name, mode)
-        result = process_single_gp(year, round_num, race_name, force=False, mode=mode)
+        log.info("[Download] %s/%s %s", year, round_num, race_name)
+        result = process_single_gp(year, round_num, race_name, force=False)
         return {
             "year": year,
             "slug": result["slug"],
-            "mode": mode,
         }
 
     @task
     def build(bronze_result: dict, **context) -> dict:
         year = bronze_result["year"]
         slug = bronze_result["slug"]
-        mode = bronze_result["mode"]
 
-        log.info("[Silver] %s/%s (mode=%s)", year, slug, mode)
-        build_gp_silver(year, slug, mode=mode)
-        return {"mode": mode}
+        log.info("[Silver] %s/%s", year, slug)
+        build_gp_silver(year, slug)
+        return {"year": year, "slug": slug}
 
     @task
     def consolidate(silver_result: dict, **context) -> dict:
-        mode = silver_result["mode"]
-        log.info("Reconstruyendo consolidados (mode=%s)", mode)
-        paths = consolidate_all(mode=mode)
-        return {"mode": mode, "paths": paths}
+        log.info("Reconstruyendo consolidados")
+        paths = consolidate_all()
+        return {"paths": paths}
 
     bronze = download()
     silver = build(bronze)

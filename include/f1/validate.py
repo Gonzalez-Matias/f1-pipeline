@@ -17,20 +17,20 @@ from f1.laps import slugify
 log = logging.getLogger(__name__)
 
 
-def check_year_completeness(year: int, mode: str = "full", force: bool = False) -> dict:
+def check_year_completeness(year: int, force: bool = False) -> dict:
     """
     Compara el calendario oficial contra lo que ya existe en Plata.
 
     Returns:
         {
             "year": int,
-            "mode": str,
             "force": bool,
             "status": "complete" | "partial" | "missing" | "empty",
             "expected_count": int,
             "existing_count": int,
             "missing_rounds": list[int],  # en calendario pero no en all
             "extra_rounds": list[int],   # en all pero no en calendario (rounds)
+            "expected": list[dict],      # calendario con slug y nombre
         }
     """
     # 1. Calendario oficial
@@ -42,19 +42,12 @@ def check_year_completeness(year: int, mode: str = "full", force: bool = False) 
     expected_count = len(expected)
     expected_rounds = {gp["round"] for gp in expected}
 
-    # 2. Lo que ya existe en el consolidado correspondiente al modo.
-    #    results_only -> f1_all_results.*; full -> f1_all_full.*
-    #    consolidate_all() escribe en CSV, pero se acepta tambien un
-    #    consolidado .parquet preexistente de antes de este cambio.
-    base_name = "f1_all_full" if mode == "full" else "f1_all_results"
-    target = next(
-        (p for p in (OUTPUT_DIR / f"{base_name}.parquet", OUTPUT_DIR / f"{base_name}.csv") if p.exists()),
-        OUTPUT_DIR / f"{base_name}.parquet",
-    )
+    # 2. Lo que ya existe en el consolidado.
+    target = OUTPUT_DIR / "f1_all_full.parquet"
     existing_rounds = set()
     if target.exists():
         try:
-            df = pd.read_csv(target, sep=";") if target.suffix == ".csv" else pd.read_parquet(target)
+            df = pd.read_parquet(target)
             year_df = df[df["Year"] == year]
             existing_rounds = set(year_df["RoundNumber"].dropna().astype(int).unique())
         except Exception as e:
@@ -77,13 +70,13 @@ def check_year_completeness(year: int, mode: str = "full", force: bool = False) 
 
     result = {
         "year": year,
-        "mode": mode,
         "force": force,
         "status": status,
         "expected_count": expected_count,
         "existing_count": existing_count,
         "missing_rounds": [gp["round"] for gp in missing],
         "extra_rounds": extra,
+        "expected": expected,
     }
 
     log.info(
@@ -93,12 +86,12 @@ def check_year_completeness(year: int, mode: str = "full", force: bool = False) 
     return result
 
 
-def should_download(year: int, mode: str = "full", force: bool = False) -> dict:
+def should_download(year: int, force: bool = False) -> dict:
     """
     Wrapper que decide si hay que descargar o no.
     Si force=True, siempre descarga.
     """
-    check = check_year_completeness(year, mode, force)
+    check = check_year_completeness(year, force)
 
     if force:
         log.info("force=True: se descarga %s aunque este completo", year)
