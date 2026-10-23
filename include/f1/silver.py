@@ -6,6 +6,7 @@ Para cada GP genera (parciales, formato interno en parquet):
 
 Consolidado (formato final en Parquet):
   - f1_all_full.parquet
+  - f1_all_postEDA.parquet (ver f1/posteda.py)
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from f1.config import (
     PARTIALS_DIR,
 )
 from f1.laps import filter_outliers, valid_laps
+from f1.posteda import build_post_eda
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +91,8 @@ def parse_archive_gp(year: int, gp_slug: str) -> pd.DataFrame:
         if column in df.columns:
             df[column] = pd.to_numeric(df[column], errors="coerce")
 
+    df = _fix_grid(df, year, gp_slug)
+
     # Qualy: convertir Q1/Q2/Q3 a segundos y calcular el mejor tiempo.
     for col in ("Q1", "Q2", "Q3"):
         if col in df.columns:
@@ -123,20 +127,126 @@ def _parse_results(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
     results = races[0].get("Results", [])
+    max_laps = max((int(r.get("laps") or 0) for r in results), default=0)
     rows = []
     for r in results:
+        raw_status = r.get("status") or ""
+        laps = int(r.get("laps") or 0)
+        laps_down = max_laps - laps
+        status = _normalize_status(raw_status, laps, laps_down, r.get("positionText"))
+        finished = status in ("Finished", "Lapped") or (
+            status == "Disqualified" and laps > 0
+        )
         rows.append({
             "DriverNumber": r.get("number"),
             "DriverId": r.get("Driver", {}).get("driverId"),
             "TeamId": r.get("Constructor", {}).get("constructorId"),
             "RACE_Position": r.get("position"),
+            "RACE_Finished": int(finished),
+            "RACE_Status": status,
+            "RACE_Laps_Down": laps_down,
+            "RACE_Lapped": int(finished and laps_down > 0),
+            "RACE_DNF_Type": None if finished else _dnf_type(raw_status, status),
             # Transitoria: se usa para calcular la tasa de carreras finalizadas
             # y se descarta en el consolidado.
             "RACE_ClassifiedPosition": r.get("positionText"),
             "Q_GridPosition": r.get("grid"),
+            # Transitoria: la usa _fix_grid y se descarta ahi.
+            "_laps": laps,
         })
 
     return pd.DataFrame(rows)
+
+
+# Hasta 2024 la fuente marca la largada desde boxes con grid = 0. Desde 2025
+# (Jolpica) le asigna un lugar de grilla y ya no se puede distinguir.
+PITLANE_GRID_ZERO_LAST_YEAR = 2024
+
+
+def _fix_grid(df: pd.DataFrame, year: int, gp_slug: str) -> pd.DataFrame:
+    """Reemplaza grid = 0 y agrega Q_PitLaneStart.
+
+    - Desde boxes (grid 0, vueltas > 0): ultimo lugar entre los que largaron
+      (empatados si son varios) y Q_PitLaneStart = 1.
+    - DNS (grid 0): su Q_Position.
+    - Otro caso: vacio + warning.
+    Q_PitLaneStart queda vacio desde 2025 (la fuente no lo informa).
+    """
+    df = df.copy()
+    grid0 = df["Q_GridPosition"] == 0
+    dns = df["RACE_Status"] == "DNS"
+    pit = grid0 & (df["_laps"] > 0)
+    dns0 = grid0 & dns
+    other = grid0 & ~pit & ~dns0
+
+    starters = int((~dns).sum())
+    df.loc[pit, "Q_GridPosition"] = starters
+
+    q_pos = df["Q_Position"] if "Q_Position" in df.columns else pd.Series(pd.NA, index=df.index)
+    df.loc[dns0, "Q_GridPosition"] = q_pos[dns0]
+    for _, r in df[dns0 & q_pos.isna()].iterrows():
+        log.warning("Grid 0 DNS sin Q_Position, queda vacio: %s/%s %s", year, gp_slug, r["DriverId"])
+
+    for _, r in df[other].iterrows():
+        log.warning("Grid 0 sin caso conocido, queda vacio: %s/%s %s (status=%s, laps=%s)",
+                    year, gp_slug, r["DriverId"], r["RACE_Status"], r["_laps"])
+    df.loc[other, "Q_GridPosition"] = pd.NA
+    # Mantener entero si no quedaron vacios (como venia de la fuente).
+    if df["Q_GridPosition"].notna().all():
+        df["Q_GridPosition"] = df["Q_GridPosition"].astype("int64")
+
+    if year <= PITLANE_GRID_ZERO_LAST_YEAR:
+        df["Q_PitLaneStart"] = pit.astype(int).where(~other)
+    else:
+        df["Q_PitLaneStart"] = pd.NA
+
+    return df.drop(columns="_laps")
+
+
+# Estados de Ergast/Jolpica. Hasta 2022 los doblados vienen como "+N Laps" y
+# los abandonos con su causa; desde 2023 como "Lapped" y casi siempre
+# "Retired" (causa desconocida).
+DNS_STATUSES = {"Did not start", "Withdrew", "Did not qualify", "Did not prequalify"}
+ACCIDENT_STATUSES = {
+    "Accident", "Collision", "Collision damage", "Spun off", "Damage", "Debris",
+}
+# "Withdrew" con vueltas > 0 es un abandono (se retiro durante la carrera).
+OTHER_DNF_STATUSES = {"Illness", "Out of fuel", "Puncture", "Tyre", "Injury", "Withdrew"}
+
+
+def _normalize_status(raw: str, laps: int, laps_down: int, pos_text: str | None) -> str:
+    """Estado normalizado: Finished / Lapped / Retired / Disqualified / DNS.
+
+    "Finished" con vueltas de desventaja pasa a Lapped (laps_down manda).
+    DNS = 0 vueltas y (positionText "W" o status de no largada): hasta 2022
+    la fuente a veces pone la causa ("Brakes") en vez de "Did not start".
+    """
+    if raw == "Finished":
+        return "Lapped" if laps_down > 0 else "Finished"
+    if raw == "Lapped" or raw.startswith("+"):
+        return "Lapped"
+    if raw == "Disqualified":
+        return "Disqualified"
+    if laps == 0 and (pos_text == "W" or raw in DNS_STATUSES):
+        return "DNS"
+    return "Retired"
+
+
+def _dnf_type(raw: str, status: str) -> str:
+    """Tipo de no-finalizacion: accidente / mecanica / descalificacion /
+    no_largo / otro / desconocido ("Retired" sin causa, desde 2023)."""
+    if status == "Disqualified":
+        return "descalificacion"
+    if status == "DNS":
+        return "no_largo"
+    if raw in ("Retired", ""):
+        return "desconocido"
+    if raw in ACCIDENT_STATUSES:
+        return "accidente"
+    if raw in OTHER_DNF_STATUSES:
+        return "otro"
+    # El resto de las causas de Ergast son fallas del auto (Engine, Gearbox...).
+    return "mecanica"
 
 
 def _parse_quali(path: Path) -> pd.DataFrame:
@@ -433,14 +543,19 @@ def _reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df[ordered + remaining]
 
 
+HIGHER_IS_BETTER = ("FP_Speed_", "FP_RPM_", "FP_Throttle_")
+
+
 def _add_abs_dbt(df: pd.DataFrame) -> pd.DataFrame:
     """Agrega los sufijos _ABS (valor absoluto) y _DBT_% (distancia porcentual
-    al mejor de la carrera) a cada columna numerica por-carrera.
+    al mejor de la carrera, 0% = mejor) a cada columna numerica por-carrera.
 
-    DBT_% = (valor - minimo de la carrera) / minimo * 100. Las columnas FP_* y
-    de qualy se renombran a _ABS y agregan su _DBT_%; DriverPoints_Before
-    mantiene su nombre y solo agrega su _DBT_% (medido respecto al maximo,
-    el lider del campeonato).
+    El mejor de la carrera es el minimo cuando menor es mejor (tiempos de
+    vuelta, frenada y qualy) y el maximo cuando mayor es mejor (velocidad,
+    RPM y acelerador). En ambos casos DBT_% = |valor - mejor| / mejor * 100.
+    Las columnas FP_* y de qualy se renombran a _ABS y agregan su _DBT_%;
+    DriverPoints_Before mantiene su nombre y solo agrega su _DBT_% (medido
+    respecto al maximo, el lider del campeonato).
     """
     rename_cols = [c for c in df.columns if c.startswith("FP_")]
     rename_cols += [
@@ -452,8 +567,12 @@ def _add_abs_dbt(df: pd.DataFrame) -> pd.DataFrame:
     for col in rename_cols:
         if not pd.api.types.is_numeric_dtype(df[col]):
             continue
-        best = df[col].min()
-        df[f"{col}_DBT_%"] = (df[col] - best) / best * 100 if best > 0 else pd.NA
+        if col.startswith(HIGHER_IS_BETTER):
+            best = df[col].max()
+            df[f"{col}_DBT_%"] = (best - df[col]) / best * 100 if best > 0 else pd.NA
+        else:
+            best = df[col].min()
+            df[f"{col}_DBT_%"] = (df[col] - best) / best * 100 if best > 0 else pd.NA
         rename[col] = f"{col}_ABS"
 
     if rename:
@@ -612,6 +731,9 @@ def consolidate_all(cleanup: bool = True) -> dict[str, str]:
         log.info("Consolidado all full: %s GPs nuevos, %s filas x %s columnas -> %s",
                  len(all_full_files), len(df), len(df.columns), dest)
         result_paths["full"] = str(dest)
+        result_paths["postEDA"] = str(
+            build_post_eda(dest, OUTPUT_DIR / "f1_all_postEDA.parquet")
+        )
     else:
         log.info("No hay archivos _full para consolidar")
 
