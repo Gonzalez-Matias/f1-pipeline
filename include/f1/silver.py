@@ -26,6 +26,7 @@ from f1.config import (
     PARTIALS_DIR,
 )
 from f1.laps import filter_outliers, valid_laps
+from f1.penalties import parse_penalties_gp
 from f1.posteda import build_post_eda
 
 log = logging.getLogger(__name__)
@@ -615,6 +616,7 @@ def build_gp_silver(year: int, gp_slug: str) -> dict[str, str]:
         df_full = df_archive.copy()
 
     df_full = _add_abs_dbt(df_full)
+    df_full = parse_penalties_gp(year, gp_slug, BRONZE_FASTF1, df_full)
     df_full = _reorder_columns(df_full)
     full_path = _save_gp_silver(year, gp_slug, df_full, suffix="full")
 

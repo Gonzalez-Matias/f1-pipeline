@@ -9,7 +9,7 @@ Se genera a partir de f1_all_full.parquet sin modificarlo:
   - Agrega FP_Desgaste_{SOFT,MED}.
   - Exporta solo las columnas finales del EDA (ver FINAL_COLUMNS).
 
-RACE_Finished y RACE_Status/Laps_Down/Lapped/DNF_Type se exportan para
+RACE_Finished, RACE_Status/Laps_Down/Lapped/DNF_Type y RACE_Penalty_* se exportan para
 filtrar o analizar (no son features: son resultado de la carrera) y
 Year/RoundNumber para separar entrenamiento y prueba.
 """
@@ -36,7 +36,10 @@ FEATURES = [
 TARGET = "RACE_Position"
 FILTER = "RACE_Finished"
 # Resultado de carrera (no son features): para filtrar o analizar.
-RACE_OUTCOME = ["RACE_Status", "RACE_Laps_Down", "RACE_Lapped", "RACE_DNF_Type"]
+RACE_OUTCOME = [
+    "RACE_Status", "RACE_Laps_Down", "RACE_Lapped", "RACE_DNF_Type",
+    "RACE_Penalty_Seconds", "RACE_Penalty_Positions_Lost",
+]
 # Informativa, no feature: vacia desde 2025 (la fuente no informa boxes).
 INFO = ["Q_PitLaneStart"]
 FINAL_COLUMNS = IDENTIFIERS + FEATURES + INFO + [FILTER] + RACE_OUTCOME + [TARGET]

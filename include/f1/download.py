@@ -285,6 +285,25 @@ def download_gp_fastf1(year: int, race_name: str, force: bool = False) -> dict:
     }
 
 
+# ------------------------------------------------------- sanciones de carrera
+
+# Mensajes de direccion de carrera y vueltas de carrera (ver f1/penalties.py).
+RACE_PENALTY_FILES = ["rcm.json", "session_laptimes.json"]
+
+
+def download_race_penalty_files(year: int, race_name: str, force: bool = False) -> dict:
+    """Descarga los archivos de la carrera que usan las sanciones."""
+    slug = slugify(race_name)
+    downloaded = missing = 0
+    for fname in RACE_PENALTY_FILES:
+        dest = BRONZE_FASTF1 / str(year) / slug / "Race" / fname
+        if download_file(_fastf1_session_url(year, race_name, "Race", fname), dest, force=force):
+            downloaded += 1
+        else:
+            missing += 1
+    return {"downloaded": downloaded, "missing": missing}
+
+
 # --------------------------------------------------------------------- manifest
 
 
@@ -329,6 +348,9 @@ def process_single_gp(
             fastf1_res["tel_skipped"],
             fastf1_res["tel_missing"],
         )
+        pen_res = download_race_penalty_files(year, race_name, force=force)
+        log.info("  Carrera (sanciones): %s descargados, %s faltantes",
+                 pen_res["downloaded"], pen_res["missing"])
 
     # Manifest
     dest_dir = BRONZE_FASTF1 / str(year) / slug if use_fastf1 else BRONZE_ERGAST / str(year) / slug
