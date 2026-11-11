@@ -301,44 +301,6 @@ def write_manifest(dest_dir: Path, year: int, round_num: int, gp_slug: str) -> N
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
 
-# ------------------------------------------------- contexto de carrera/qualy
-
-# Sesiones y archivos de contexto (clima, direccion de carrera, curvas). Los
-# nombres de sprint cambiaron entre temporadas; las que no existen dan 404.
-CONTEXT_SESSIONS = ["Race", "Qualifying", "Sprint", "Sprint Qualifying", "Sprint Shootout"]
-CONTEXT_FILES = ["weather.json", "rcm.json", "corners.json", "drivers.json"]
-# Solo de la carrera: vueltas de todos los pilotos (vuelta de abandono,
-# neumaticos, estado de pista).
-RACE_ONLY_FILES = ["session_laptimes.json"]
-
-
-def download_gp_context(year: int, race_name: str, force: bool = False) -> dict:
-    """Descarga clima, mensajes de direccion de carrera y curvas de las
-    sesiones de carrera, qualy y sprint (a bronce FastF1)."""
-    slug = slugify(race_name)
-    sessions_ok, downloaded, missing = 0, 0, 0
-    # Practicas: solo el clima (el resto ya se baja en download_gp_fastf1).
-    for session in CONTEXT_SESSIONS + FASTF1_SESSIONS:
-        if session in FASTF1_SESSIONS:
-            files = ["weather.json"]
-        else:
-            files = CONTEXT_FILES + (RACE_ONLY_FILES if session == "Race" else [])
-        session_dir = BRONZE_FASTF1 / str(year) / slug / session
-        got = 0
-        for fname in files:
-            dest = session_dir / fname
-            if download_file(_fastf1_session_url(year, race_name, session, fname), dest, force=force):
-                got += 1
-            else:
-                missing += 1
-        downloaded += got
-        sessions_ok += got > 0
-        # No dejar carpetas vacias de sesiones que no existen.
-        if got == 0 and session_dir.exists() and not any(session_dir.iterdir()):
-            session_dir.rmdir()
-    return {"sessions": sessions_ok, "downloaded": downloaded, "missing": missing}
-
-
 # ------------------------------------------------------------------- single gp
 
 
@@ -367,9 +329,6 @@ def process_single_gp(
             fastf1_res["tel_skipped"],
             fastf1_res["tel_missing"],
         )
-        ctx = download_gp_context(year, race_name, force=force)
-        log.info("  Contexto: %s sesiones, %s archivos (%s faltantes)",
-                 ctx["sessions"], ctx["downloaded"], ctx["missing"])
 
     # Manifest
     dest_dir = BRONZE_FASTF1 / str(year) / slug if use_fastf1 else BRONZE_ERGAST / str(year) / slug
