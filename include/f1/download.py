@@ -133,9 +133,17 @@ def download_gp_archive(year: int, race_name: str, force: bool = False) -> dict:
 # --------------------------------------------------------------- fastf1 repo
 
 
+# GPs que TracingInsights publica con otro nombre que el calendario de Jolpica.
+# Solo cambia la URL remota; la carpeta local mantiene el slug de Jolpica.
+TRACING_RACE_ALIASES = {
+    (2026, "Bahrain Grand Prix in Malaysia"): "Bahrain Grand Prix",
+}
+
+
 def _fastf1_session_url(year: int, race_name: str, session: str, path: str) -> str:
     """Arma la URL raw de GitHub para un archivo de una sesion FastF1."""
     repo = TRACING_REPO_TEMPLATE.format(year=year)
+    race_name = TRACING_RACE_ALIASES.get((year, race_name), race_name)
     return (
         f"{RAW_BASE}/{repo}/main/"
         f"{quote(race_name, safe='')}/"
